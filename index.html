@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Geneva Billing</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root{--navy:#1b2a41;--gold:#b8963e;--paper:#f7f5ef;--line:#d9d4c7;--muted:#6b7280;--text:#1f2937;--green:#2f6b4f;--red:#a23b2a}
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,sans-serif;font-size:15px;color:var(--text);background:var(--paper)}
+header{background:var(--navy);color:#fff;padding:12px 14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+header b{font-family:Georgia,serif;font-size:19px}header small{display:block;color:var(--gold);font-size:12px}
+nav{display:flex;background:var(--navy);padding:0 6px 8px;gap:4px;flex-wrap:wrap}
+nav button{background:transparent;color:#d7dce6;border:0;padding:8px 12px;border-radius:6px;font:inherit}
+nav button.on{background:rgba(255,255,255,.14);color:#fff}
+main{padding:14px;max-width:900px;margin:0 auto}
+h2{font-family:Georgia,serif;margin:0 0 10px;font-size:22px}h3{font-family:Georgia,serif;margin:20px 0 8px;font-size:17px}
+table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);font-size:14px}
+th,td{padding:8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}th{color:var(--muted);font-weight:500;font-size:12px;background:#fbfaf7}
+.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}tfoot td{font-weight:600;background:#fbfaf7}
+input,select,textarea{font:inherit;padding:8px;border:1px solid var(--line);border-radius:5px;background:#fff;width:100%}
+input.n{text-align:right}label{display:block;font-size:12px;color:var(--muted);margin-bottom:3px}
+.f{margin-bottom:10px}.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.btn{font:inherit;padding:9px 14px;border-radius:5px;border:1px solid var(--navy);background:var(--navy);color:#fff}
+.btn.g{background:transparent;color:var(--navy)}.btn.d{background:transparent;color:var(--red);border-color:var(--red)}.btn.s{padding:4px 9px;font-size:13px}
+.btn:disabled{opacity:.5}.link{background:none;border:0;color:var(--navy);text-decoration:underline;font:inherit;padding:0}
+.panel{background:#fff;border:1px solid var(--line);padding:14px;margin-bottom:14px}
+.note{border-left:3px solid var(--gold);background:#f3ead3;padding:8px 12px;margin-bottom:12px;font-size:14px}
+.err{border-left:3px solid var(--red);background:#f8e9e6;color:var(--red);padding:8px 12px;margin-bottom:12px;font-size:14px}
+.ok{border-left:3px solid var(--green);background:#e8f1ec;color:var(--green);padding:8px 12px;margin-bottom:12px;font-size:14px}
+.empty{padding:30px;text-align:center;color:var(--muted);background:#fff;border:1px dashed var(--line)}
+.pill{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;border:1px solid var(--line);color:var(--muted)}
+.pill.final{border-color:var(--green);color:var(--green)}.pill.void{border-color:var(--red);color:var(--red)}.pill.x{border-color:var(--red);color:var(--red)}
+.click{cursor:pointer}.click:active{background:#fcfbf8}
+.stmt{background:#fff;border:1px solid var(--line);border-top:4px solid var(--gold);padding:20px 16px}
+.stmt .firm{font-family:Georgia,serif;font-size:18px}.stmt .firm small{display:block;font-family:system-ui;font-size:12px;color:var(--muted)}
+.stmt .meta{color:var(--muted);font-size:13px;margin-top:8px;line-height:1.6}
+.amt{font-family:Georgia,serif;font-size:40px;line-height:1;margin:20px 0 4px;font-variant-numeric:tabular-nums}
+.sub{color:var(--muted);font-size:13px}.acts{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+.muted{color:var(--muted);font-size:13px}.wrap{overflow-x:auto}
+@media print{header,nav,.acts,.link{display:none!important}body{background:#fff}main{padding:0;max-width:none}.stmt{border:0;padding:0}}
+</style>
+</head>
+<body>
+<header><div><b>Geneva Billing</b><small>Geneva Financial Group</small></div>
+<div class="acts" style="margin:0"><button class="btn g s" onclick="exportData()">Export backup</button><button class="btn g s" onclick="document.getElementById('imp').click()">Restore</button><input id="imp" type="file" accept=".json" hidden onchange="importData(this)"></div></header>
+<nav id="nav"></nav>
+<main id="app"></main>
+<script>
+// ---------- storage ----------
+const KEY='geneva-billing-v2';
+let D=load();
+function load(){try{const x=JSON.parse(localStorage.getItem(KEY));if(x&&x.clients)return Object.assign(fresh(),x)}catch{}return fresh()}
+function fresh(){return{clients:[],accounts:[],tiers:[],excl:[],positions:[],runs:[],mapping:null}}
+function save(){localStorage.setItem(KEY,JSON.stringify(D))}
+function exportData(){const b=new Blob([JSON.stringify(D)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='geneva-billing-backup-'+today()+'.json';a.click()}
+function importData(inp){const f=inp.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{const x=JSON.parse(r.result);if(!x.clients)throw 0;if(confirm('Replace all current data with this backup?')){D=Object.assign(fresh(),x);save();render()}}catch{alert('Not a valid backup file')}};r.readAsText(f);inp.value=''}
+const uid=()=>Math.random().toString(36).slice(2,10)+Date.now().toString(36);
+const today=()=>new Date().toISOString().slice(0,10);
+const money=n=>Number(n||0).toLocaleString('en-US',{style:'currency',currency:'USD'});
+const pct=(r,d=3)=>(Number(r||0)*100).toFixed(d)+'%';
+const fd=d=>d?new Date(d+'T00:00:00').toLocaleDateString('en-US',{year:'numeric',month:'short',day:'numeric'}):'';
+const fm=ym=>new Date(ym+'-01T00:00:00').toLocaleDateString('en-US',{year:'numeric',month:'long'});
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const acctName=a=>a.nickname||`${a.custodian} ${a.number}`;
+const normNum=s=>String(s??'').replace(/[^0-9a-z]/gi,'').toUpperCase();
+const normSec=s=>String(s??'').trim().toUpperCase();
+const monthEnd=ym=>{const[y,m]=ym.split('-').map(Number);const d=new Date(y,m,0);return`${y}-${String(m).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`};
+const daysIn=ym=>{const[y,m]=ym.split('-').map(Number);return new Date(y,m,0).getDate()};
+const lastMonth=()=>{const d=new Date();d.setDate(0);return d.toISOString().slice(0,7)};
+
+// ---------- routing ----------
+let view={p:'clients',id:null};
+function go(p,id=null){view={p,id};render()}
+const NAV=[['clients','Clients'],['positions','Positions'],['runs','Billing runs']];
+
+// ---------- fee math ----------
+function tiersFor(c){return D.tiers.filter(t=>t.client===c).sort((a,b)=>a.min-b.min)}
+function marginal(tiers,aum){return tiers.map(t=>{const top=t.max==null?aum:Math.min(t.max,aum);const slice=Math.max(0,top-t.min);return{...t,slice,fee:Math.round(slice*t.rate*100)/100}})}
+function isExcluded(clientId,accountId,secId){return D.excl.some(e=>e.client===clientId&&normSec(e.secId)===normSec(secId)&&(!e.account||e.account===accountId))}
+
+// ---------- render ----------
+function render(){
+  document.getElementById('nav').innerHTML=NAV.map(([p,l])=>`<button class="${view.p===p?'on':''}" onclick="go('${p}')">${l}</button>`).join('');
+  document.getElementById('app').innerHTML=({clients:view.id?clientDetail:clients,positions:positions,runs:view.id?runDetail:runs})[view.p]();
+}
+
+// ---------- clients ----------
+function clients(){
+  const rows=D.clients.slice().sort((a,b)=>a.name.localeCompare(b.name));
+  return `<h2>Clients</h2>
+  <div class="panel"><div class="f"><label>New client</label><input id="nc" placeholder="Household or entity name"></div><button class="btn" onclick="addClient()">Add client</button></div>
+  ${rows.length?`<table><thead><tr><th>Client</th><th class="n">Accounts</th><th class="n">Tiers</th><th class="n">Excluded IDs</th></tr></thead><tbody>
+  ${rows.map(c=>`<tr class="click" onclick="go('clients','${c.id}')"><td>${esc(c.name)}${c.active?'':' <span class=pill>inactive</span>'}</td><td class="n">${D.accounts.filter(a=>a.client===c.id).length}</td><td class="n">${tiersFor(c.id).length}</td><td class="n">${D.excl.filter(e=>e.client===c.id).length}</td></tr>`).join('')}
+  </tbody></table>`:`<div class="empty">No clients yet. Add the first one above.</div>`}`;
+}
+function addClient(){const n=document.getElementById('nc').value.trim();if(!n)return;const c={id:uid(),name:n,active:true,notes:''};D.clients.push(c);save();go('clients',c.id)}
+
+function clientDetail(){
+  const c=D.clients.find(x=>x.id===view.id);if(!c)return clients();
+  const accts=D.accounts.filter(a=>a.client===c.id),tiers=tiersFor(c.id);
+  const excl=D.excl.filter(e=>e.client===c.id);
+  const warn=[];if(tiers.length&&tiers[0].min!==0)warn.push('First tier should start at $0.');
+  for(let i=0;i<tiers.length-1;i++){if(tiers[i].max==null)warn.push('An open-ended tier is not last.');else if(tiers[i].max!==tiers[i+1].min)warn.push(`Gap or overlap at ${money(tiers[i].max)} / ${money(tiers[i+1].min)}.`)}
+  if(tiers.length&&tiers.at(-1).max!=null)warn.push('Last tier should have no cap (leave "up to" blank).');
+  const sample=1000000,sf=marginal(tiers,sample).reduce((s,t)=>s+t.fee,0);
+  const seen=[...new Set(D.positions.filter(p=>accts.some(a=>a.id===p.account)).map(p=>normSec(p.secId)))].sort();
+  return `<button class="link" onclick="go('clients')">All clients</button><h2 style="margin-top:6px">${esc(c.name)}</h2>
+  <div class="panel"><div class="row"><div class="f"><label>Client name</label><input value="${esc(c.name)}" onchange="upd('${c.id}','name',this.value)"></div>
+  <div class="f"><label>Status</label><select onchange="upd('${c.id}','active',this.value==='1')"><option value="1" ${c.active?'selected':''}>Active</option><option value="0" ${c.active?'':'selected'}>Inactive</option></select></div></div>
+  <div class="f"><label>Notes</label><textarea rows="2" onchange="upd('${c.id}','notes',this.value)">${esc(c.notes)}</textarea></div></div>
+
+  <h3>Accounts</h3><p class="muted">Account numbers must match the spreadsheet (spaces and dashes are ignored).</p>
+  ${accts.length?`<table><thead><tr><th>Custodian</th><th>Number</th><th>Nickname</th><th></th></tr></thead><tbody>${accts.map(a=>`<tr><td>${a.custodian}</td><td>${esc(a.number)}</td><td>${esc(a.nickname)}</td><td class="n"><button class="btn g s" onclick="toggleAcct('${a.id}')">${a.active?'Deactivate':'Reactivate'}</button></td></tr>`).join('')}</tbody></table>`:''}
+  <div class="panel" style="margin-top:10px"><div class="row"><div class="f"><label>Custodian</label><select id="ac">${['Schwab','Pershing','IBKR','Other'].map(o=>`<option>${o}</option>`).join('')}</select></div><div class="f"><label>Account number</label><input id="an"></div></div>
+  <div class="f"><label>Nickname</label><input id="ak" placeholder="e.g. Joint taxable"></div><button class="btn" onclick="addAcct('${c.id}')">Add account</button></div>
+
+  <h3>Fee schedule <span class="pill">marginal, annual rate ÷ 365 × days in month</span></h3>
+  ${warn.map(w=>`<div class="note">${w}</div>`).join('')}
+  ${tiers.length?`<table><thead><tr><th class="n">From</th><th class="n">Up to</th><th class="n">Annual rate</th><th></th></tr></thead><tbody>${tiers.map(t=>`<tr><td class="n">${money(t.min)}</td><td class="n">${t.max==null?'and above':money(t.max)}</td><td class="n">${pct(t.rate)}</td><td class="n"><button class="btn d s" onclick="delTier('${t.id}')">Remove</button></td></tr>`).join('')}</tbody></table>
+  <p class="muted">On ${money(sample)} billable: ${money(sf)}/yr, effective ${pct(sf/sample)}, a 31-day month ≈ ${money(sf*31/365)}.</p>`:''}
+  <div class="panel"><div class="row"><div class="f"><label>From ($)</label><input id="tmin" class="n" type="number" value="${tiers.length?(tiers.at(-1).max??''):0}"></div><div class="f"><label>Up to ($, blank = no cap)</label><input id="tmax" class="n" type="number"></div></div>
+  <div class="f"><label>Annual rate (%)</label><input id="trate" class="n" type="number" step="0.001" placeholder="1.00"></div><button class="btn" onclick="addTier('${c.id}')">Add tier</button></div>
+
+  <h3>Excluded securities <span class="pill">by security ID</span></h3>
+  <p class="muted">Positions with these IDs are removed from billable value whenever they appear in the monthly upload.</p>
+  ${excl.length?`<table><thead><tr><th>Security ID</th><th>Account</th><th>Note</th><th></th></tr></thead><tbody>${excl.map(e=>{const a=D.accounts.find(x=>x.id===e.account);return`<tr><td><b>${esc(e.secId)}</b></td><td>${a?esc(acctName(a)):'All accounts'}</td><td>${esc(e.note)}</td><td class="n"><button class="btn d s" onclick="delExcl('${e.id}')">Remove</button></td></tr>`}).join('')}</tbody></table>`:''}
+  <div class="panel" style="margin-top:10px"><div class="row"><div class="f"><label>Security ID (ticker or CUSIP)</label><input id="es" list="seen" placeholder="e.g. AAPL or 037833100" style="text-transform:uppercase"><datalist id="seen">${seen.map(s=>`<option value="${esc(s)}">`).join('')}</datalist></div>
+  <div class="f"><label>Applies to</label><select id="ea"><option value="">All accounts</option>${accts.filter(a=>a.active).map(a=>`<option value="${a.id}">${esc(acctName(a))}</option>`).join('')}</select></div></div>
+  <div class="f"><label>Note</label><input id="en" placeholder="e.g. Legacy holding, not advised"></div><button class="btn" onclick="addExcl('${c.id}')">Add exclusion</button></div>`;
+}
+function upd(id,k,v){const c=D.clients.find(x=>x.id===id);c[k]=v;save();if(k==='name')render()}
+function addAcct(c){const number=document.getElementById('an').value.trim();if(!number)return;if(D.accounts.some(a=>normNum(a.number)===normNum(number)))return alert('That account number already exists.');D.accounts.push({id:uid(),client:c,custodian:document.getElementById('ac').value,number,nickname:document.getElementById('ak').value.trim(),active:true});save();render()}
+function toggleAcct(id){const a=D.accounts.find(x=>x.id===id);a.active=!a.active;save();render()}
+function addTier(c){const r=document.getElementById('trate').value;if(r==='')return;const mx=document.getElementById('tmax').value;D.tiers.push({id:uid(),client:c,min:Number(document.getElementById('tmin').value||0),max:mx===''?null:Number(mx),rate:Number(r)/100});save();render()}
+function delTier(id){D.tiers=D.tiers.filter(t=>t.id!==id);save();render()}
+function addExcl(c){const secId=normSec(document.getElementById('es').value);if(!secId)return;D.excl.push({id:uid(),client:c,account:document.getElementById('ea').value||null,secId,note:document.getElementById('en').value.trim()});save();render()}
+function delExcl(id){D.excl=D.excl.filter(e=>e.id!==id);save();render()}
+
+// ---------- positions: upload + review ----------
+let pending=null;
+let pdate=lastMonth();
+const FIELDS=[['account','Account number'],['secId','Security ID'],['desc','Description (optional)'],['value','Market value']];
+function guess(h){h=h.toLowerCase();if(/acc(oun)?t/.test(h)&&!/name|type/.test(h))return'account';if(/cusip|symbol|ticker|security\s*id|sec\s*id|^id$/.test(h))return'secId';if(/desc|name|security$/.test(h))return'desc';if(/market|value|mv|amount|balance/.test(h))return'value';return''}
+function positions(){
+  const dates=[...new Set(D.positions.map(p=>p.date))].sort().reverse();
+  const me=monthEnd(pdate);
+  const pos=D.positions.filter(p=>p.date===me);
+  let html=`<h2>Positions</h2><p class="muted">Upload the month-end position spreadsheet once a month. Each row: account number, security ID, market value.</p>
+  <div class="panel"><div class="row"><div class="f"><label>Month</label><input type="month" value="${pdate}" onchange="pdate=this.value;pending=null;render()"></div>
+  <div class="f"><label>Spreadsheet (.xlsx or .csv)</label><input type="file" accept=".xlsx,.xls,.csv" onchange="readSheet(this)"></div></div>
+  <div class="muted">Values will be stored as of ${fd(me)}.${pos.length?` This month already has ${pos.length} positions; uploading again replaces them.`:''}</div></div>`;
+  if(pending){
+    const m=pending.map;
+    html+=`<div class="panel"><b>${esc(pending.name)}</b> — ${pending.rows.length} rows. Match the columns:
+    <div class="row" style="margin-top:10px">${FIELDS.map(([k,l])=>`<div class="f"><label>${l}</label><select onchange="pending.map.${k}=this.value;render()"><option value="">—</option>${pending.headers.map(h=>`<option ${m[k]===h?'selected':''}>${esc(h)}</option>`).join('')}</select></div>`).join('')}</div>
+    ${preview()}</div>`;
+  }
+  if(pos.length){
+    const byAcct={};pos.forEach(p=>(byAcct[p.account]??=[]).push(p));
+    html+=`<h3>${fm(pdate)} — ${pos.length} positions</h3><div class="wrap"><table><thead><tr><th>Security</th><th class="n">Value</th><th></th></tr></thead><tbody>`;
+    const accts=Object.keys(byAcct).map(id=>D.accounts.find(a=>a.id===id)).sort((a,b)=>(cName(a.client)+acctName(a)).localeCompare(cName(b.client)+acctName(b)));
+    for(const a of accts){const rows=byAcct[a.id];const sub=rows.reduce((s,p)=>s+p.value,0);
+      html+=`<tr><td colspan=3 style="background:#fbfaf7"><b>${esc(cName(a.client))}</b> · ${esc(acctName(a))} <span class="muted">${money(sub)}</span></td></tr>`;
+      html+=rows.map(p=>{const x=isExcluded(a.client,a.id,p.secId);return`<tr><td><b>${esc(p.secId)}</b><span class="muted" style="margin-left:6px">${esc(p.desc)}</span></td><td class="n">${money(p.value)}</td><td>${x?'<span class="pill x">excluded</span>':''}</td></tr>`}).join('')}
+    html+=`</tbody></table></div>`;
+  } else if(dates.length){html+=`<p class="muted">Months on file: ${dates.map(d=>fd(d)).join(', ')}</p>`}
+  return html;
+}
+function cName(id){return D.clients.find(c=>c.id===id)?.name||'?'}
+function readSheet(inp){const f=inp.files[0];if(!f)return;const r=new FileReader();
+  r.onload=e=>{let rows;try{const wb=XLSX.read(e.target.result,{type:'array'});const ws=wb.Sheets[wb.SheetNames[0]];rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''})}catch(err){return alert('Could not read file: '+err.message)}
+    rows=rows.filter(r=>r.some(c=>String(c).trim()!==''));if(rows.length<2)return alert('No data rows found.');
+    let hi=rows.findIndex(r=>r.filter(c=>String(c).trim()!=='').length>=3);if(hi<0)hi=0;const headers=rows[hi].map((h,i)=>String(h).trim()||`Column ${i+1}`);
+    const data=rows.slice(hi+1).map(r=>Object.fromEntries(headers.map((h,i)=>[h,r[i]])));
+    const map={account:'',secId:'',desc:'',value:''};
+    if(D.mapping&&Object.values(D.mapping).every(v=>!v||headers.includes(v)))Object.assign(map,D.mapping);
+    else headers.forEach(h=>{const g=guess(h);if(g&&!map[g])map[g]=h});
+    pending={name:f.name,headers,rows:data,map};render()};
+  r.readAsArrayBuffer(f);inp.value=''}
+function toNum(v){if(typeof v==='number')return v;const s=String(v).replace(/[$,\s]/g,'').replace(/^\((.*)\)$/,'-$1');if(s==='')return null;const n=Number(s);return isNaN(n)?null:n}
+function parsePending(){const m=pending.map;const out=[],unmatched=new Set(),bad=[];
+  for(const r of pending.rows){const num=normNum(r[m.account]);const sec=normSec(r[m.secId]);const val=toNum(r[m.value]);
+    if(!num&&!sec)continue;
+    if(val===null){bad.push(`${num} ${sec}: value "${r[m.value]}"`);continue}
+    const a=D.accounts.find(x=>normNum(x.number)===num);
+    if(!a){unmatched.add(String(r[m.account]));continue}
+    out.push({account:a.id,date:monthEnd(pdate),secId:sec||'CASH',desc:m.desc?String(r[m.desc]??'').trim():'',value:val})}
+  return{out,unmatched:[...unmatched],bad}}
+function preview(){const m=pending.map;if(!m.account||!m.secId||!m.value)return`<div class="note">Pick the account, security ID and market value columns.</div>`;
+  const{out,unmatched,bad}=parsePending();const total=out.reduce((s,p)=>s+p.value,0);
+  return `${unmatched.length?`<div class="err">${unmatched.length} account number${unmatched.length===1?'':'s'} not set up under any client — these rows will be skipped: ${unmatched.map(esc).join(', ')}. Add them under Clients, then upload again.</div>`:''}
+  ${bad.length?`<div class="err">${bad.length} row${bad.length===1?'':'s'} with unreadable values skipped: ${bad.slice(0,5).map(esc).join('; ')}${bad.length>5?'…':''}</div>`:''}
+  <div class="ok">${out.length} positions ready, total ${money(total)}, as of ${fd(monthEnd(pdate))}.</div>
+  <button class="btn" onclick="commitPending()" ${out.length?'':'disabled'}>Save ${out.length} positions for ${fm(pdate)}</button>`}
+function commitPending(){const{out}=parsePending();const me=monthEnd(pdate);D.positions=D.positions.filter(p=>p.date!==me).concat(out);D.mapping={...pending.map};pending=null;save();render()}
+
+// ---------- billing runs ----------
+function runs(){
+  const act=D.clients.filter(c=>c.active).sort((a,b)=>a.name.localeCompare(b.name));
+  const rs=D.runs.slice().sort((a,b)=>b.month.localeCompare(a.month)||a.clientName.localeCompare(b.clientName));
+  const drafts=rs.filter(r=>r.status==='draft'),dt=drafts.reduce((s,r)=>s+r.fee,0);
+  const months=[...new Set(D.positions.map(p=>p.date.slice(0,7)))].sort().reverse();
+  return `<h2>Billing runs</h2><p class="muted">Fee = month-end billable value × annual rate ÷ 365 × days in the month.</p>
+  <div class="panel"><div class="row"><div class="f"><label>Month</label><select id="rm">${months.length?months.map(m=>`<option value="${m}">${fm(m)} (${daysIn(m)} days)</option>`).join(''):`<option value="">No positions uploaded yet</option>`}</select></div>
+  <div class="f"><label>Client</label><select id="rc"><option value="ALL">All active clients</option>${act.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div></div>
+  <button class="btn" onclick="createRuns()" ${months.length?'':'disabled'}>Create draft run(s)</button><div id="rmsg"></div></div>
+  ${drafts.length?`<div class="note">${drafts.length} draft, ${money(dt)} unbilled</div>`:''}
+  ${rs.length?`<table><thead><tr><th>Client</th><th>Month</th><th class="n">Billable</th><th class="n">Fee</th><th></th></tr></thead><tbody>${rs.map(r=>`<tr class="click" onclick="go('runs','${r.id}')"><td>${esc(r.clientName)}</td><td>${fm(r.month)}</td><td class="n">${money(r.billable)}</td><td class="n">${money(r.fee)}</td><td><span class="pill ${r.status}">${r.status}</span></td></tr>`).join('')}</tbody></table>`:`<div class="empty">No runs yet. Upload positions, then create a draft run.</div>`}`;
+}
+function createRuns(){
+  const month=document.getElementById('rm').value,cid=document.getElementById('rc').value;if(!month)return;
+  const me=monthEnd(month),days=daysIn(month);
+  const targets=cid==='ALL'?D.clients.filter(c=>c.active):D.clients.filter(c=>c.id===cid);const ok=[],bad=[];
+  for(const c of targets){
+    if(D.runs.some(r=>r.client===c.id&&r.month===month&&r.status!=='void')){bad.push(`${c.name}: a run for ${fm(month)} already exists`);continue}
+    const tiers=tiersFor(c.id);if(!tiers.length){bad.push(`${c.name}: no fee tiers`);continue}
+    const accts=D.accounts.filter(a=>a.client===c.id&&a.active);
+    const pos=D.positions.filter(p=>p.date===me&&accts.some(a=>a.id===p.account));
+    if(!pos.length){bad.push(`${c.name}: no positions on ${fd(me)}`);continue}
+    const lines=[],exclList=[];
+    for(const a of accts){const ps=pos.filter(p=>p.account===a.id);if(!ps.length)continue;
+      const mv=ps.reduce((s,p)=>s+p.value,0);let ex=0;
+      ps.forEach(p=>{if(isExcluded(c.id,a.id,p.secId)){ex+=p.value;exclList.push({acct:acctName(a),secId:p.secId,desc:p.desc,value:p.value})}});
+      lines.push({label:acctName(a),mv,excl:ex,billable:mv-ex})}
+    const gross=lines.reduce((s,l)=>s+l.mv,0),exclT=lines.reduce((s,l)=>s+l.excl,0),billable=Math.max(0,gross-exclT);
+    const tb=marginal(tiers,billable),annual=tb.reduce((s,t)=>s+t.fee,0),fee=Math.round(annual*days/365*100)/100;
+    D.runs.push({id:uid(),client:c.id,clientName:c.name,month,vd:me,days,gross,exclT,billable,annual,fee,rate:billable>0?annual/billable:0,lines,exclList,tiers:tb,status:'draft',created:new Date().toISOString()});ok.push(c.name)}
+  save();render();
+  document.getElementById('rmsg').innerHTML=(ok.length?`<div class="ok" style="margin-top:10px">Created ${ok.length} draft run${ok.length===1?'':'s'}.</div>`:'')+bad.map(b=>`<div class="err">${esc(b)}</div>`).join('');
+  if(targets.length===1&&ok.length===1)go('runs',D.runs.at(-1).id)}
+function runDetail(){
+  const r=D.runs.find(x=>x.id===view.id);if(!r)return runs();
+  return `<button class="link" onclick="go('runs')">All runs</button>
+  <div class="acts"><span class="pill ${r.status}" style="align-self:center">${r.status}</span><button class="btn g" onclick="print()">Print / PDF</button>
+  ${r.status==='draft'?`<button class="btn d" onclick="delRun('${r.id}')">Delete draft</button><button class="btn" onclick="finalizeRun('${r.id}')">Finalize</button>`:''}
+  ${r.status==='final'?`<button class="btn d" onclick="voidRun('${r.id}')">Void</button>`:''}</div>
+  <div class="stmt"><div class="firm">Geneva Financial Group<small>Advisory fee statement</small></div>
+  <div class="meta">${esc(r.clientName)}<br>${fm(r.month)} · ${r.days} days<br>Values as of ${fd(r.vd)}</div>
+  <div class="muted" style="margin-top:18px">Advisory fee</div><div class="amt">${money(r.fee)}</div>
+  <div class="sub">${money(r.billable)} billable × ${pct(r.rate)} effective annual rate ÷ 365 × ${r.days} days.</div>
+  <h3>Accounts</h3><table><thead><tr><th>Account</th><th class="n">Value</th><th class="n">Excluded</th><th class="n">Billable</th></tr></thead><tbody>
+  ${r.lines.map(l=>`<tr><td>${esc(l.label)}</td><td class="n">${money(l.mv)}</td><td class="n">${l.excl?'−'+money(l.excl):''}</td><td class="n">${money(l.billable)}</td></tr>`).join('')}</tbody>
+  <tfoot><tr><td>Total</td><td class="n">${money(r.gross)}</td><td class="n">${r.exclT?'−'+money(r.exclT):''}</td><td class="n">${money(r.billable)}</td></tr></tfoot></table>
+  ${r.exclList.length?`<h3>Excluded positions</h3><table><thead><tr><th>Account</th><th>Security</th><th class="n">Value</th></tr></thead><tbody>${r.exclList.map(e=>`<tr><td>${esc(e.acct)}</td><td><b>${esc(e.secId)}</b> <span class="muted">${esc(e.desc)}</span></td><td class="n">${money(e.value)}</td></tr>`).join('')}</tbody></table>`:''}
+  <h3>Fee calculation</h3><table><thead><tr><th>Tier</th><th class="n">Rate</th><th class="n">In tier</th><th class="n">Annual fee</th></tr></thead><tbody>
+  ${r.tiers.map(t=>`<tr><td>${money(t.min)} ${t.max==null?'and above':'to '+money(t.max)}</td><td class="n">${pct(t.rate)}</td><td class="n">${money(t.slice)}</td><td class="n">${money(t.fee)}</td></tr>`).join('')}</tbody>
+  <tfoot><tr><td colspan=3>Annual fee on billable value</td><td class="n">${money(r.annual)}</td></tr><tr><td colspan=3>÷ 365 × ${r.days} days</td><td class="n">${money(r.fee)}</td></tr></tfoot></table>
+  <p class="muted" style="margin-top:18px">Created ${new Date(r.created).toLocaleString()}${r.finalized?`, finalized ${new Date(r.finalized).toLocaleString()}`:''}. Ref ${r.id.slice(0,8)}.</p></div>`;
+}
+function finalizeRun(id){if(!confirm('Finalize this run? It becomes read-only.'))return;const r=D.runs.find(x=>x.id===id);r.status='final';r.finalized=new Date().toISOString();save();render()}
+function voidRun(id){if(!confirm('Void this run? It stays in history marked void.'))return;D.runs.find(x=>x.id===id).status='void';save();render()}
+function delRun(id){if(!confirm('Delete this draft?'))return;D.runs=D.runs.filter(r=>r.id!==id);save();go('runs')}
+
+render();
+</script>
+</body>
+</html>
