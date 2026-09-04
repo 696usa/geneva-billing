@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Geneva Billing</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <style>
 :root{--navy:#1b2a41;--gold:#b8963e;--paper:#f7f5ef;--line:#d9d4c7;--muted:#6b7280;--text:#1f2937;--green:#2f6b4f;--red:#a23b2a}
 *{box-sizing:border-box}body{margin:0;font-family:system-ui,sans-serif;font-size:15px;color:var(--text);background:var(--paper)}
@@ -39,23 +41,63 @@ input.n{text-align:right}label{display:block;font-size:12px;color:var(--muted);m
 .sub{color:var(--muted);font-size:13px}.acts{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
 .muted{color:var(--muted);font-size:13px}.wrap{overflow-x:auto}
 @media print{header,nav,.acts,.link{display:none!important}body{background:#fff}main{padding:0;max-width:none}.stmt{border:0;padding:0}}
+.gate{min-height:100vh;display:grid;place-items:center;background:var(--navy);padding:20px}
+.gate .card{background:#fff;padding:28px;width:100%;max-width:380px;border-top:4px solid var(--gold)}
+.gate h2{margin-bottom:14px}.gate .muted{margin:8px 0 14px}
+.busy{position:fixed;top:0;left:0;right:0;height:3px;background:var(--gold);display:none}
 </style>
 </head>
 <body>
-<header><div><b>Geneva Billing</b><small>Geneva Financial Group</small></div>
-<div class="acts" style="margin:0"><button class="btn g s" onclick="exportData()">Export backup</button><button class="btn g s" onclick="document.getElementById('imp').click()">Restore</button><input id="imp" type="file" accept=".json" hidden onchange="importData(this)"></div></header>
-<nav id="nav"></nav>
+<div id="busy" class="busy"></div>
+<div id="gate"></div>
+<header id="hdr" style="display:none"><div><b>Geneva Billing</b><small>Geneva Financial Group</small></div>
+<div class="acts" style="margin:0"><button class="btn g s" onclick="exportData()">Export backup</button><button class="btn g s" onclick="signOut()">Sign out</button></div></header>
+<nav id="nav" style="display:none"></nav>
+<div id="errbar" class="err" style="display:none;margin:10px 14px 0"></div>
 <main id="app"></main>
 <script>
-// ---------- storage ----------
-const KEY='geneva-billing-v2';
-let D=load();
-function load(){try{const x=JSON.parse(localStorage.getItem(KEY));if(x&&x.clients)return Object.assign(fresh(),x)}catch{}return fresh()}
-function fresh(){return{clients:[],accounts:[],tiers:[],excl:[],positions:[],runs:[],mapping:null}}
-function save(){localStorage.setItem(KEY,JSON.stringify(D))}
+window.onerror=(m,src,l,c,e)=>{const b=document.getElementById('errbar');b.style.display='block';b.textContent='Error: '+m+' (line '+l+')'};
+window.onunhandledrejection=e=>{const b=document.getElementById('errbar');b.style.display='block';b.textContent='Error: '+(e.reason?.message||e.reason)};
+// ---------- Supabase connection ----------
+const CFG_KEY='geneva-billing-cfg';
+let sb=null,D=fresh();
+function fresh(){return{clients:[],accounts:[],tiers:[],excl:[],positions:[],runs:[],invoices:[],mapping:null,cashSyms:['CASH'],mmSyms:[],nextInv:1,firm:{name:'Geneva Financial Group',addr:'',phone:'',email:'',terms:'Fee is debited from the account or payable within 30 days.'}}}
+function cfg(){try{return JSON.parse(localStorage.getItem(CFG_KEY))}catch{return null}}
+function gate(html){document.getElementById('gate').innerHTML=html?`<div class="gate"><div class="card">${html}</div></div>`:'';document.getElementById('hdr').style.display=html?'none':'';document.getElementById('nav').style.display=html?'none':''}
+function showSetup(msg){gate(`<h2>Connect to Supabase</h2><div class="muted">${msg||'Enter the project URL and anon key from Supabase → Project Settings → API. This is saved on this device only.'}</div>
+  <div class="f"><label>Project URL</label><input id="cu" placeholder="https://xxxx.supabase.co" value="${esc(cfg()?.url||'')}"></div>
+  <div class="f"><label>Anon public key</label><input id="ck" placeholder="eyJ..." value="${esc(cfg()?.key||'')}"></div>
+  <button class="btn" onclick="saveCfg()">Continue</button>`)}
+function saveCfg(){const url=document.getElementById('cu').value.trim().replace(/\/$/,''),key=document.getElementById('ck').value.trim();if(!/^https:\/\/.+\.supabase\.co$/.test(url)||!key.startsWith('ey'))return showSetup('That does not look right — the URL should end in .supabase.co and the key starts with "ey".');localStorage.setItem(CFG_KEY,JSON.stringify({url,key}));boot()}
+function showLogin(msg){gate(`<h2>Sign in</h2>${msg?`<div class="err">${esc(msg)}</div>`:''}<div class="f"><label>Email</label><input id="le" type="email" autocomplete="username"></div><div class="f"><label>Password</label><input id="lp" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')signIn()"></div><button class="btn" onclick="signIn()">Sign in</button><div class="muted" style="margin-top:14px"><button class="link" onclick="localStorage.removeItem(CFG_KEY);boot()">Change Supabase project</button></div>`)}
+async function signIn(){const{error}=await sb.auth.signInWithPassword({email:document.getElementById('le').value.trim(),password:document.getElementById('lp').value});if(error)return showLogin(error.message);boot()}
+async function signOut(){await sb.auth.signOut();boot()}
+async function boot(){const c=cfg();if(!c)return showSetup();
+  sb=window.supabase.createClient(c.url,c.key);
+  const{data:{session}}=await sb.auth.getSession();if(!session)return showLogin();
+  const{data:adm,error}=await sb.rpc('is_admin');if(error)return showLogin('Database not ready: '+error.message);
+  if(!adm)return gate(`<h2>Not authorized</h2><div class="muted">${esc(session.user.email)} is not on the admin list. In Supabase SQL Editor run:<br><code>insert into app_admins(user_id) values ('${session.user.id}');</code></div><button class="btn g" onclick="signOut()">Sign out</button>`);
+  gate('<h2>Loading…</h2>');try{await loadAll()}catch(e){return gate(`<h2>Could not load</h2><div class="err">${esc(e.message)}</div><button class="btn g" onclick="boot()">Retry</button>`)}
+  gate('');render()}
+const q=(name,op)=>op.then(r=>{if(r.error)throw new Error(name+': '+r.error.message);return r.data});
+async function loadAll(){
+  const [c,a,t,e,p,r,i,s]=await Promise.all([q('clients',sb.from('clients').select('*')),q('accounts',sb.from('accounts').select('*')),q('fee_tiers',sb.from('fee_tiers').select('*')),q('exclusions',sb.from('exclusions').select('*')),q('positions',sb.from('positions').select('account_id,as_of,sec_id,descr,value').limit(50000)),q('billing_runs',sb.from('billing_runs').select('*')),q('invoices',sb.from('invoices').select('*')),q('settings',sb.from('settings').select('*'))]);
+  D=fresh();
+  D.clients=c.map(x=>({id:x.id,name:x.name,active:x.active,notes:x.notes}));
+  D.accounts=a.map(x=>({id:x.id,client:x.client_id,custodian:x.custodian,number:x.number,nickname:x.nickname,active:x.active}));
+  D.tiers=t.map(x=>({id:x.id,client:x.client_id,min:+x.tier_min,max:x.tier_max==null?null:+x.tier_max,rate:+x.annual_rate}));
+  D.excl=e.map(x=>({id:x.id,client:x.client_id,account:x.account_id,secId:x.sec_id,note:x.note}));
+  D.positions=p.map(x=>({account:x.account_id,date:x.as_of,secId:x.sec_id,desc:x.descr,value:+x.value}));
+  D.runs=r.map(x=>({id:x.id,client:x.client_id,clientName:x.client_name,month:x.month,vd:x.as_of,days:x.days,gross:+x.gross,exclT:+x.excluded,billable:+x.billable,annual:+x.annual_fee,fee:+x.fee,rate:+x.eff_rate,lines:x.lines,exclList:x.excl_list,tiers:x.tiers,status:x.status,invoiceNo:x.invoice_no,created:x.created_at,finalized:x.finalized_at}));
+  D.invoices=i.map(x=>({id:x.id,no:x.no,runId:x.run_id,client:x.client_id,clientName:x.client_name,month:x.month,fee:+x.fee,billable:+x.billable,path:x.path,created:x.created_at}));
+  s.forEach(x=>{D[x.key]=x.value});
+}
+function busy(on){document.getElementById('busy').style.display=on?'block':'none'}
+async function db(name,op){busy(true);try{return await q(name,op)}catch(e){const b=document.getElementById('errbar');b.style.display='block';b.textContent=e.message;throw e}finally{busy(false)}}
+const setSetting=(k,v)=>db('settings',sb.from('settings').upsert({key:k,value:v}));
+function save(){/* persistence is per-action now */}
 function exportData(){const b=new Blob([JSON.stringify(D)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='geneva-billing-backup-'+today()+'.json';a.click()}
-function importData(inp){const f=inp.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{const x=JSON.parse(r.result);if(!x.clients)throw 0;if(confirm('Replace all current data with this backup?')){D=Object.assign(fresh(),x);save();render()}}catch{alert('Not a valid backup file')}};r.readAsText(f);inp.value=''}
-const uid=()=>Math.random().toString(36).slice(2,10)+Date.now().toString(36);
+const uid=()=>crypto.randomUUID();
 const today=()=>new Date().toISOString().slice(0,10);
 const money=n=>Number(n||0).toLocaleString('en-US',{style:'currency',currency:'USD'});
 const pct=(r,d=3)=>(Number(r||0)*100).toFixed(d)+'%';
@@ -72,7 +114,7 @@ const lastMonth=()=>{const d=new Date();d.setDate(0);return d.toISOString().slic
 // ---------- routing ----------
 let view={p:'clients',id:null};
 function go(p,id=null){view={p,id};render()}
-const NAV=[['clients','Clients'],['positions','Positions'],['runs','Billing runs']];
+const NAV=[['clients','Clients'],['positions','Positions'],['search','Search'],['cash','Cash'],['runs','Billing runs'],['invoices','Invoices']];
 
 // ---------- fee math ----------
 function tiersFor(c){return D.tiers.filter(t=>t.client===c).sort((a,b)=>a.min-b.min)}
@@ -82,19 +124,20 @@ function isExcluded(clientId,accountId,secId){return D.excl.some(e=>e.client===c
 // ---------- render ----------
 function render(){
   document.getElementById('nav').innerHTML=NAV.map(([p,l])=>`<button class="${view.p===p?'on':''}" onclick="go('${p}')">${l}</button>`).join('');
-  document.getElementById('app').innerHTML=({clients:view.id?clientDetail:clients,positions:positions,runs:view.id?runDetail:runs})[view.p]();
+  document.getElementById('app').innerHTML=({clients:view.id?clientDetail:clients,positions:positions,search:search,cash:cash,runs:view.id?runDetail:runs,invoices:invoices})[view.p]();
+  if(view.p==='invoices')loadInvoices();
 }
 
 // ---------- clients ----------
 function clients(){
   const rows=D.clients.slice().sort((a,b)=>a.name.localeCompare(b.name));
   return `<h2>Clients</h2>
-  <div class="panel"><div class="f"><label>New client</label><input id="nc" placeholder="Household or entity name"></div><button class="btn" onclick="addClient()">Add client</button></div>
+  <div class="panel"><div class="f"><label>New client</label><input id="nc" placeholder="Household or entity name" onkeydown="if(event.key==='Enter')addClient()"></div><button class="btn" onclick="addClient()">Add client</button></div>
   ${rows.length?`<table><thead><tr><th>Client</th><th class="n">Accounts</th><th class="n">Tiers</th><th class="n">Excluded IDs</th></tr></thead><tbody>
   ${rows.map(c=>`<tr class="click" onclick="go('clients','${c.id}')"><td>${esc(c.name)}${c.active?'':' <span class=pill>inactive</span>'}</td><td class="n">${D.accounts.filter(a=>a.client===c.id).length}</td><td class="n">${tiersFor(c.id).length}</td><td class="n">${D.excl.filter(e=>e.client===c.id).length}</td></tr>`).join('')}
   </tbody></table>`:`<div class="empty">No clients yet. Add the first one above.</div>`}`;
 }
-function addClient(){const n=document.getElementById('nc').value.trim();if(!n)return;const c={id:uid(),name:n,active:true,notes:''};D.clients.push(c);save();go('clients',c.id)}
+async function addClient(){const el=document.getElementById('nc');const n=el.value.trim();if(!n){el.focus();el.style.borderColor='var(--red)';el.placeholder='Type the client name first';return}const c={id:uid(),name:n,active:true,notes:''};await db('clients',sb.from('clients').insert({id:c.id,name:c.name}));D.clients.push(c);go('clients',c.id)}
 
 function clientDetail(){
   const c=D.clients.find(x=>x.id===view.id);if(!c)return clients();
@@ -104,7 +147,8 @@ function clientDetail(){
   for(let i=0;i<tiers.length-1;i++){if(tiers[i].max==null)warn.push('An open-ended tier is not last.');else if(tiers[i].max!==tiers[i+1].min)warn.push(`Gap or overlap at ${money(tiers[i].max)} / ${money(tiers[i+1].min)}.`)}
   if(tiers.length&&tiers.at(-1).max!=null)warn.push('Last tier should have no cap (leave "up to" blank).');
   const sample=1000000,sf=marginal(tiers,sample).reduce((s,t)=>s+t.fee,0);
-  const seen=[...new Set(D.positions.filter(p=>accts.some(a=>a.id===p.account)).map(p=>normSec(p.secId)))].sort();
+  const heldMap={};D.positions.filter(p=>accts.some(a=>a.id===p.account)).forEach(p=>{const k=normSec(p.secId);if(!heldMap[k]||p.desc)heldMap[k]=p.desc||heldMap[k]||''});
+  const unexcl=Object.keys(heldMap).sort().filter(k=>!excl.some(e=>normSec(e.secId)===k&&!e.account)).map(k=>({id:k,desc:heldMap[k]}));
   return `<button class="link" onclick="go('clients')">All clients</button><h2 style="margin-top:6px">${esc(c.name)}</h2>
   <div class="panel"><div class="row"><div class="f"><label>Client name</label><input value="${esc(c.name)}" onchange="upd('${c.id}','name',this.value)"></div>
   <div class="f"><label>Status</label><select onchange="upd('${c.id}','active',this.value==='1')"><option value="1" ${c.active?'selected':''}>Active</option><option value="0" ${c.active?'':'selected'}>Inactive</option></select></div></div>
@@ -125,17 +169,25 @@ function clientDetail(){
   <h3>Excluded securities <span class="pill">by security ID</span></h3>
   <p class="muted">Positions with these IDs are removed from billable value whenever they appear in the monthly upload.</p>
   ${excl.length?`<table><thead><tr><th>Security ID</th><th>Account</th><th>Note</th><th></th></tr></thead><tbody>${excl.map(e=>{const a=D.accounts.find(x=>x.id===e.account);return`<tr><td><b>${esc(e.secId)}</b></td><td>${a?esc(acctName(a)):'All accounts'}</td><td>${esc(e.note)}</td><td class="n"><button class="btn d s" onclick="delExcl('${e.id}')">Remove</button></td></tr>`}).join('')}</tbody></table>`:''}
-  <div class="panel" style="margin-top:10px"><div class="row"><div class="f"><label>Security ID (ticker or CUSIP)</label><input id="es" list="seen" placeholder="e.g. AAPL or 037833100" style="text-transform:uppercase"><datalist id="seen">${seen.map(s=>`<option value="${esc(s)}">`).join('')}</datalist></div>
-  <div class="f"><label>Applies to</label><select id="ea"><option value="">All accounts</option>${accts.filter(a=>a.active).map(a=>`<option value="${a.id}">${esc(acctName(a))}</option>`).join('')}</select></div></div>
-  <div class="f"><label>Note</label><input id="en" placeholder="e.g. Legacy holding, not advised"></div><button class="btn" onclick="addExcl('${c.id}')">Add exclusion</button></div>`;
+  <div class="panel" style="margin-top:10px">
+  <div class="f"><label>Security IDs (tickers or CUSIPs — one per line, or separated by commas or spaces)</label><textarea id="es" rows="3" placeholder="AAPL&#10;037833100&#10;VTI" style="text-transform:uppercase"></textarea></div>
+  ${unexcl.length?`<div class="f"><label>Or tick securities currently held by this client</label><div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">${unexcl.map(s=>`<label style="display:flex;gap:6px;align-items:center;font-size:14px;color:var(--text)"><input type="checkbox" class="exchk" value="${esc(s.id)}" style="width:auto"><span><b>${esc(s.id)}</b> <span class="muted">${esc(s.desc)}</span></span></label>`).join('')}</div></div>`:''}
+  <div class="row"><div class="f"><label>Applies to</label><select id="ea"><option value="">All accounts</option>${accts.filter(a=>a.active).map(a=>`<option value="${a.id}">${esc(acctName(a))}</option>`).join('')}</select></div>
+  <div class="f"><label>Note</label><input id="en" placeholder="e.g. Legacy holding, not advised"></div></div>
+  <button class="btn" onclick="addExcl('${c.id}')">Add exclusions</button></div>`;
 }
-function upd(id,k,v){const c=D.clients.find(x=>x.id===id);c[k]=v;save();if(k==='name')render()}
-function addAcct(c){const number=document.getElementById('an').value.trim();if(!number)return;if(D.accounts.some(a=>normNum(a.number)===normNum(number)))return alert('That account number already exists.');D.accounts.push({id:uid(),client:c,custodian:document.getElementById('ac').value,number,nickname:document.getElementById('ak').value.trim(),active:true});save();render()}
-function toggleAcct(id){const a=D.accounts.find(x=>x.id===id);a.active=!a.active;save();render()}
-function addTier(c){const r=document.getElementById('trate').value;if(r==='')return;const mx=document.getElementById('tmax').value;D.tiers.push({id:uid(),client:c,min:Number(document.getElementById('tmin').value||0),max:mx===''?null:Number(mx),rate:Number(r)/100});save();render()}
-function delTier(id){D.tiers=D.tiers.filter(t=>t.id!==id);save();render()}
-function addExcl(c){const secId=normSec(document.getElementById('es').value);if(!secId)return;D.excl.push({id:uid(),client:c,account:document.getElementById('ea').value||null,secId,note:document.getElementById('en').value.trim()});save();render()}
-function delExcl(id){D.excl=D.excl.filter(e=>e.id!==id);save();render()}
+async function upd(id,k,v){const c=D.clients.find(x=>x.id===id);await db('clients',sb.from('clients').update({[k]:v}).eq('id',id));c[k]=v;if(k==='name')render()}
+async function addAcct(c){const number=document.getElementById('an').value.trim();if(!number)return;if(D.accounts.some(a=>normNum(a.number)===normNum(number)))return alert('That account number already exists.');const a={id:uid(),client:c,custodian:document.getElementById('ac').value,number,nickname:document.getElementById('ak').value.trim(),active:true};await db('accounts',sb.from('accounts').insert({id:a.id,client_id:c,custodian:a.custodian,number,nickname:a.nickname}));D.accounts.push(a);render()}
+async function toggleAcct(id){const a=D.accounts.find(x=>x.id===id);await db('accounts',sb.from('accounts').update({active:!a.active}).eq('id',id));a.active=!a.active;render()}
+async function addTier(c){const r=document.getElementById('trate').value;if(r==='')return;const mx=document.getElementById('tmax').value;const t={id:uid(),client:c,min:Number(document.getElementById('tmin').value||0),max:mx===''?null:Number(mx),rate:Number(r)/100};await db('fee_tiers',sb.from('fee_tiers').insert({id:t.id,client_id:c,tier_min:t.min,tier_max:t.max,annual_rate:t.rate}));D.tiers.push(t);render()}
+async function delTier(id){await db('fee_tiers',sb.from('fee_tiers').delete().eq('id',id));D.tiers=D.tiers.filter(t=>t.id!==id);render()}
+async function addExcl(c){const typed=document.getElementById('es').value.split(/[\s,;]+/).map(normSec).filter(Boolean);
+  const ticked=[...document.querySelectorAll('.exchk:checked')].map(x=>normSec(x.value));
+  const ids=[...new Set(typed.concat(ticked))];if(!ids.length){document.getElementById('es').focus();return}
+  const account=document.getElementById('ea').value||null,note=document.getElementById('en').value.trim();
+  const rows=[];for(const secId of ids){if(D.excl.some(e=>e.client===c&&normSec(e.secId)===secId&&(e.account||null)===account))continue;rows.push({id:uid(),client:c,account,secId,note})}
+  if(!rows.length)return alert('Those securities are already excluded.');await db('exclusions',sb.from('exclusions').insert(rows.map(x=>({id:x.id,client_id:c,account_id:account,sec_id:x.secId,note}))));D.excl.push(...rows);render()}
+async function delExcl(id){await db('exclusions',sb.from('exclusions').delete().eq('id',id));D.excl=D.excl.filter(e=>e.id!==id);render()}
 
 // ---------- positions: upload + review ----------
 let pending=null;
@@ -193,7 +245,7 @@ function preview(){const m=pending.map;if(!m.account||!m.secId||!m.value)return`
   ${bad.length?`<div class="err">${bad.length} row${bad.length===1?'':'s'} with unreadable values skipped: ${bad.slice(0,5).map(esc).join('; ')}${bad.length>5?'…':''}</div>`:''}
   <div class="ok">${out.length} positions ready, total ${money(total)}, as of ${fd(monthEnd(pdate))}.</div>
   <button class="btn" onclick="commitPending()" ${out.length?'':'disabled'}>Save ${out.length} positions for ${fm(pdate)}</button>`}
-function commitPending(){const{out}=parsePending();const me=monthEnd(pdate);D.positions=D.positions.filter(p=>p.date!==me).concat(out);D.mapping={...pending.map};pending=null;save();render()}
+async function commitPending(){const{out}=parsePending();const me=monthEnd(pdate);await db('positions',sb.from('positions').delete().eq('as_of',me));for(let i=0;i<out.length;i+=500)await db('positions',sb.from('positions').insert(out.slice(i,i+500).map(p=>({account_id:p.account,as_of:p.date,sec_id:p.secId,descr:p.desc,value:p.value}))));D.positions=D.positions.filter(p=>p.date!==me).concat(out);D.mapping={...pending.map};await setSetting('mapping',D.mapping);pending=null;render()}
 
 // ---------- billing runs ----------
 function runs(){
@@ -208,7 +260,7 @@ function runs(){
   ${drafts.length?`<div class="note">${drafts.length} draft, ${money(dt)} unbilled</div>`:''}
   ${rs.length?`<table><thead><tr><th>Client</th><th>Month</th><th class="n">Billable</th><th class="n">Fee</th><th></th></tr></thead><tbody>${rs.map(r=>`<tr class="click" onclick="go('runs','${r.id}')"><td>${esc(r.clientName)}</td><td>${fm(r.month)}</td><td class="n">${money(r.billable)}</td><td class="n">${money(r.fee)}</td><td><span class="pill ${r.status}">${r.status}</span></td></tr>`).join('')}</tbody></table>`:`<div class="empty">No runs yet. Upload positions, then create a draft run.</div>`}`;
 }
-function createRuns(){
+async function createRuns(){
   const month=document.getElementById('rm').value,cid=document.getElementById('rc').value;if(!month)return;
   const me=monthEnd(month),days=daysIn(month);
   const targets=cid==='ALL'?D.clients.filter(c=>c.active):D.clients.filter(c=>c.id===cid);const ok=[],bad=[];
@@ -225,8 +277,9 @@ function createRuns(){
       lines.push({label:acctName(a),mv,excl:ex,billable:mv-ex})}
     const gross=lines.reduce((s,l)=>s+l.mv,0),exclT=lines.reduce((s,l)=>s+l.excl,0),billable=Math.max(0,gross-exclT);
     const tb=marginal(tiers,billable),annual=tb.reduce((s,t)=>s+t.fee,0),fee=Math.round(annual*days/365*100)/100;
-    D.runs.push({id:uid(),client:c.id,clientName:c.name,month,vd:me,days,gross,exclT,billable,annual,fee,rate:billable>0?annual/billable:0,lines,exclList,tiers:tb,status:'draft',created:new Date().toISOString()});ok.push(c.name)}
-  save();render();
+    const run={id:uid(),client:c.id,clientName:c.name,month,vd:me,days,gross,exclT,billable,annual,fee,rate:billable>0?annual/billable:0,lines,exclList,tiers:tb,status:'draft',created:new Date().toISOString()};
+    try{await db('billing_runs',sb.from('billing_runs').insert({id:run.id,client_id:c.id,client_name:c.name,month,as_of:me,days,gross,excluded:exclT,billable,annual_fee:annual,fee,eff_rate:run.rate,lines,excl_list:exclList,tiers:tb}));D.runs.push(run);ok.push(c.name)}catch(e){bad.push(c.name+': '+e.message)}}
+  render();
   document.getElementById('rmsg').innerHTML=(ok.length?`<div class="ok" style="margin-top:10px">Created ${ok.length} draft run${ok.length===1?'':'s'}.</div>`:'')+bad.map(b=>`<div class="err">${esc(b)}</div>`).join('');
   if(targets.length===1&&ok.length===1)go('runs',D.runs.at(-1).id)}
 function runDetail(){
@@ -234,7 +287,7 @@ function runDetail(){
   return `<button class="link" onclick="go('runs')">All runs</button>
   <div class="acts"><span class="pill ${r.status}" style="align-self:center">${r.status}</span><button class="btn g" onclick="print()">Print / PDF</button>
   ${r.status==='draft'?`<button class="btn d" onclick="delRun('${r.id}')">Delete draft</button><button class="btn" onclick="finalizeRun('${r.id}')">Finalize</button>`:''}
-  ${r.status==='final'?`<button class="btn d" onclick="voidRun('${r.id}')">Void</button>`:''}</div>
+  ${r.status==='final'?`<button class="btn g" onclick="openInvoiceByRun('${r.id}')">Open invoice ${esc(r.invoiceNo||'')}</button><button class="btn d" onclick="voidRun('${r.id}')">Void</button>`:''}</div>
   <div class="stmt"><div class="firm">Geneva Financial Group<small>Advisory fee statement</small></div>
   <div class="meta">${esc(r.clientName)}<br>${fm(r.month)} · ${r.days} days<br>Values as of ${fd(r.vd)}</div>
   <div class="muted" style="margin-top:18px">Advisory fee</div><div class="amt">${money(r.fee)}</div>
@@ -248,11 +301,122 @@ function runDetail(){
   <tfoot><tr><td colspan=3>Annual fee on billable value</td><td class="n">${money(r.annual)}</td></tr><tr><td colspan=3>÷ 365 × ${r.days} days</td><td class="n">${money(r.fee)}</td></tr></tfoot></table>
   <p class="muted" style="margin-top:18px">Created ${new Date(r.created).toLocaleString()}${r.finalized?`, finalized ${new Date(r.finalized).toLocaleString()}`:''}. Ref ${r.id.slice(0,8)}.</p></div>`;
 }
-function finalizeRun(id){if(!confirm('Finalize this run? It becomes read-only.'))return;const r=D.runs.find(x=>x.id===id);r.status='final';r.finalized=new Date().toISOString();save();render()}
-function voidRun(id){if(!confirm('Void this run? It stays in history marked void.'))return;D.runs.find(x=>x.id===id).status='void';save();render()}
-function delRun(id){if(!confirm('Delete this draft?'))return;D.runs=D.runs.filter(r=>r.id!==id);save();go('runs')}
+async function finalizeRun(id){if(!confirm('Finalize this run and create the invoice PDF?'))return;const r=D.runs.find(x=>x.id===id);
+  const no='GFG-'+r.month.replace('-','')+'-'+String(D.nextInv).padStart(4,'0');
+  const blob=makeInvoicePdf(r,no);
+  const path=r.month+'/'+no+'.pdf';const up=await sb.storage.from('invoices').upload(path,blob,{contentType:'application/pdf',upsert:true});if(up.error)return alert('Upload failed: '+up.error.message);
+  const inv={id:uid(),no,runId:r.id,client:r.client,clientName:r.clientName,month:r.month,fee:r.fee,billable:r.billable,path,created:new Date().toISOString()};
+  await db('invoices',sb.from('invoices').insert({id:inv.id,no,run_id:r.id,client_id:r.client,client_name:r.clientName,month:r.month,fee:r.fee,billable:r.billable,path}));
+  const fin=new Date().toISOString();await db('billing_runs',sb.from('billing_runs').update({status:'final',invoice_no:no,finalized_at:fin}).eq('id',id));
+  D.invoices.push(inv);r.status='final';r.finalized=fin;r.invoiceNo=no;D.nextInv++;await setSetting('nextInv',D.nextInv);render()}
+async function voidRun(id){if(!confirm('Void this run? It stays in history marked void.'))return;await db('billing_runs',sb.from('billing_runs').update({status:'void'}).eq('id',id));D.runs.find(x=>x.id===id).status='void';render()}
+async function delRun(id){if(!confirm('Delete this draft?'))return;await db('billing_runs',sb.from('billing_runs').delete().eq('id',id));D.runs=D.runs.filter(r=>r.id!==id);go('runs')}
 
-render();
+// ---------- search across all clients ----------
+let sQ='',sMonth=null,cMonth=null;
+const months=()=>[...new Set(D.positions.map(p=>p.date))].sort().reverse();
+const acctOf=id=>D.accounts.find(a=>a.id===id);
+const isCash=sec=>D.cashSyms.map(normSec).includes(normSec(sec));
+const isMM=sec=>D.mmSyms.map(normSec).includes(normSec(sec));
+function monthPicker(cur,setter){const ms=months();if(!ms.length)return'';return`<div class="f"><label>As of</label><select onchange="${setter}=this.value;render()">${ms.map(d=>`<option value="${d}" ${d===cur?'selected':''}>${fd(d)}</option>`).join('')}</select></div>`}
+function search(){
+  const ms=months();if(!ms.length)return`<h2>Search</h2><div class="empty">Upload positions first.</div>`;
+  const date=sMonth&&ms.includes(sMonth)?sMonth:ms[0];
+  const q=sQ.trim().toLowerCase();
+  const rows=D.positions.filter(p=>p.date===date).map(p=>{const a=acctOf(p.account);return{...p,a,client:a?cName(a.client):'?'}})
+    .filter(r=>!q||[r.secId,r.desc,r.client,r.a?acctName(r.a):''].join(' ').toLowerCase().includes(q))
+    .sort((x,y)=>x.client.localeCompare(y.client)||y.value-x.value);
+  const byClient={};rows.forEach(r=>(byClient[r.client]??=[]).push(r));
+  const total=rows.reduce((s,r)=>s+r.value,0);
+  const secs=[...new Set(rows.map(r=>normSec(r.secId)))];
+  return `<h2>Search positions</h2><p class="muted">Find who holds a security, or everything matching a word, across all clients.</p>
+  <div class="panel"><div class="row"><div class="f"><label>Security ID, description, client or account</label><input id="sq" value="${esc(sQ)}" placeholder="e.g. SPY, 037833100, Apple" oninput="sQ=this.value;render();const i=document.getElementById('sq');i.focus();i.setSelectionRange(999,999)"></div>${monthPicker(date,'sMonth')}</div>
+  ${q?`<div class="muted">${rows.length} position${rows.length===1?'':'s'} in ${Object.keys(byClient).length} client${Object.keys(byClient).length===1?'':'s'}${secs.length===1?` · everyone holding ${esc(secs[0])}`:''} · total ${money(total)}</div>`:''}</div>
+  ${rows.length?`<div class="wrap"><table><thead><tr><th>Account</th><th>Security</th><th class="n">Value</th></tr></thead><tbody>
+  ${Object.keys(byClient).map(cn=>{const rs=byClient[cn];const sub=rs.reduce((s,r)=>s+r.value,0);return`<tr><td colspan=3 style="background:#fbfaf7"><b>${esc(cn)}</b> <span class="muted">${rs.length} · ${money(sub)}</span></td></tr>`+rs.map(r=>`<tr><td>${r.a?esc(acctName(r.a)):''}</td><td><b>${esc(r.secId)}</b> <span class="muted">${esc(r.desc)}</span>${isMM(r.secId)?' <span class="pill">money market</span>':isCash(r.secId)?' <span class="pill">cash</span>':''}</td><td class="n">${money(r.value)}</td></tr>`).join('')}).join('')}
+  </tbody><tfoot><tr><td colspan=2>Total</td><td class="n">${money(total)}</td></tr></tfoot></table></div>`:`<div class="empty">Nothing matches "${esc(sQ)}" on ${fd(date)}.</div>`}`;
+}
+
+// ---------- cash & money market ----------
+function cash(){
+  const ms=months();if(!ms.length)return`<h2>Cash</h2><div class="empty">Upload positions first.</div>`;
+  const date=cMonth&&ms.includes(cMonth)?cMonth:ms[0];
+  const pos=D.positions.filter(p=>p.date===date);
+  const held=[...new Set(pos.map(p=>normSec(p.secId)))].sort();const descOf=k=>pos.find(p=>normSec(p.secId)===k&&p.desc)?.desc||'';
+  const per={};
+  pos.forEach(p=>{const a=acctOf(p.account);if(!a)return;const cn=cName(a.client);const o=(per[cn]??={cash:0,mm:0,accts:{}});const ao=(o.accts[acctName(a)]??={cash:0,mm:0});
+    if(isMM(p.secId)){o.mm+=p.value;ao.mm+=p.value}else if(isCash(p.secId)){o.cash+=p.value;ao.cash+=p.value}});
+  const names=Object.keys(per).sort();const T={cash:0,mm:0};names.forEach(n=>{T.cash+=per[n].cash;T.mm+=per[n].mm});
+  const chk=(list,sym)=>`<label style="display:flex;gap:6px;align-items:center;font-size:14px;color:var(--text)"><input type="checkbox" style="width:auto" ${D[list].map(normSec).includes(sym)?'checked':''} onchange="toggleSym('${list}','${esc(sym)}',this.checked)"><span><b>${esc(sym)}</b> <span class="muted">${esc(descOf(sym))}</span></span></label>`;
+  return `<h2>Cash balances</h2><p class="muted">Cash plus money-market funds, per client, as of the selected month-end.</p>
+  <div class="panel">${monthPicker(date,'cMonth')}</div>
+  ${names.length&&(T.cash||T.mm)?`<div class="wrap"><table><thead><tr><th>Client</th><th class="n">Cash</th><th class="n">Money market</th><th class="n">Total</th></tr></thead><tbody>
+  ${names.filter(n=>per[n].cash||per[n].mm).map(n=>{const o=per[n];const accts=Object.keys(o.accts).filter(k=>o.accts[k].cash||o.accts[k].mm);return`<tr><td><b>${esc(n)}</b></td><td class="n">${money(o.cash)}</td><td class="n">${money(o.mm)}</td><td class="n"><b>${money(o.cash+o.mm)}</b></td></tr>`+(accts.length>1?accts.map(k=>`<tr><td class="muted" style="padding-left:22px">${esc(k)}</td><td class="n muted">${money(o.accts[k].cash)}</td><td class="n muted">${money(o.accts[k].mm)}</td><td class="n muted">${money(o.accts[k].cash+o.accts[k].mm)}</td></tr>`).join(''):'')}).join('')}
+  </tbody><tfoot><tr><td>All clients</td><td class="n">${money(T.cash)}</td><td class="n">${money(T.mm)}</td><td class="n">${money(T.cash+T.mm)}</td></tr></tfoot></table></div>`:`<div class="note">No cash or money-market symbols found for ${fd(date)}. Tick the symbols below so they're counted.</div>`}
+  <h3>Which symbols count as cash</h3><p class="muted">Tick the money-market funds and any cash/sweep symbols in your upload. Rows with an empty security ID are already treated as CASH.</p>
+  <div class="panel"><div class="row">
+    <div><label>Money market funds</label><div style="display:grid;gap:4px">${held.filter(k=>!isCash(k)).map(k=>chk('mmSyms',k)).join('')||'<span class="muted">—</span>'}</div></div>
+    <div><label>Cash / sweep</label><div style="display:grid;gap:4px">${held.filter(k=>!isMM(k)).map(k=>chk('cashSyms',k)).join('')||'<span class="muted">—</span>'}</div></div></div>
+  <div class="f" style="margin-top:12px"><label>Add symbols not in this month's upload (comma or space separated)</label><div class="row"><input id="mmadd" placeholder="Money market, e.g. SWVXX FDRXX" style="text-transform:uppercase"><input id="cashadd" placeholder="Cash, e.g. CASH USD" style="text-transform:uppercase"></div></div>
+  <button class="btn" onclick="addSyms()">Save symbols</button>
+  <p class="muted" style="margin-top:10px">Currently — money market: ${D.mmSyms.map(esc).join(', ')||'none'} · cash: ${D.cashSyms.map(esc).join(', ')||'none'}</p></div>`;
+}
+async function toggleSym(list,sym,on){sym=normSec(sym);const other=list==='mmSyms'?'cashSyms':'mmSyms';D[other]=D[other].filter(x=>normSec(x)!==sym);D[list]=D[list].filter(x=>normSec(x)!==sym);if(on)D[list].push(sym);await setSetting('cashSyms',D.cashSyms);await setSetting('mmSyms',D.mmSyms);render()}
+async function addSyms(){const sp=id=>document.getElementById(id).value.split(/[\s,;]+/).map(normSec).filter(Boolean);for(const x of sp('mmadd'))await toggleSym('mmSyms',x,true);for(const x of sp('cashadd'))await toggleSym('cashSyms',x,true);render()}
+
+// ---------- invoices ----------
+let invQ='';
+function loadInvoices(){}
+async function invUrl(i){const{data,error}=await sb.storage.from('invoices').createSignedUrl(i.path,120);if(error)throw new Error(error.message);return data.signedUrl}
+async function openInvoice(id){const i=D.invoices.find(x=>x.id===id);if(!i)return;const w=window.open('','_blank');w.location=await invUrl(i)}
+async function dlInvoice(id){const i=D.invoices.find(x=>x.id===id);if(!i)return;const{data,error}=await sb.storage.from('invoices').download(i.path);if(error)return alert(error.message);const a=document.createElement('a');a.href=URL.createObjectURL(data);a.download=i.no+'.pdf';a.click()}
+async function openInvoiceByRun(runId){const i=D.invoices.find(x=>x.runId===runId);if(i)openInvoice(i.id);else alert('No invoice stored for this run.')}
+function invoices(){
+  const q=invQ.toLowerCase();
+  const invCache=D.invoices.slice().sort((a,b)=>b.created.localeCompare(a.created));const rows=invCache.filter(i=>!q||[i.no,i.clientName,fm(i.month),money(i.fee)].join(' ').toLowerCase().includes(q));
+  const F=D.firm;
+  return `<h2>Invoices</h2><p class="muted">Created automatically when a billing run is finalized. Stored in Supabase.</p>
+  <div class="panel"><input placeholder="Search by invoice no., client, month or amount" value="${esc(invQ)}" oninput="invQ=this.value;document.getElementById('app').innerHTML=invoices();document.querySelector('main input').focus();document.querySelector('main input').setSelectionRange(99,99)"></div>
+  ${rows.length?`<table><thead><tr><th>Invoice</th><th>Client</th><th>Month</th><th class="n">Fee</th><th></th></tr></thead><tbody>${rows.map(i=>`<tr><td><b>${esc(i.no)}</b><div class="muted">${new Date(i.created).toLocaleDateString()}</div></td><td>${esc(i.clientName)}</td><td>${fm(i.month)}</td><td class="n">${money(i.fee)}</td><td class="n"><button class="btn g s" onclick="openInvoice('${i.id}')">Open</button> <button class="btn g s" onclick="dlInvoice('${i.id}')">Save</button></td></tr>`).join('')}</tbody></table>`:`<div class="empty">${invCache.length?'No invoices match.':'No invoices yet. Finalize a billing run to create one.'}</div>`}
+  <h3>Invoice header</h3><div class="panel"><div class="f"><label>Firm name</label><input value="${esc(F.name)}" onchange="D.firm.name=this.value;setSetting('firm',D.firm)"></div>
+  <div class="f"><label>Address</label><input value="${esc(F.addr)}" onchange="D.firm.addr=this.value;setSetting('firm',D.firm)" placeholder="Street, City, ST ZIP"></div>
+  <div class="row"><div class="f"><label>Phone</label><input value="${esc(F.phone)}" onchange="D.firm.phone=this.value;setSetting('firm',D.firm)"></div><div class="f"><label>Email</label><input value="${esc(F.email)}" onchange="D.firm.email=this.value;setSetting('firm',D.firm)"></div></div>
+  <div class="f"><label>Payment terms (printed on invoice)</label><input value="${esc(F.terms)}" onchange="D.firm.terms=this.value;setSetting('firm',D.firm)"></div>
+  <div class="f"><label>Next invoice number</label><input class="n" type="number" value="${D.nextInv}" onchange="D.nextInv=Number(this.value)||1;setSetting('nextInv',D.nextInv)"></div></div>`;
+}
+function makeInvoicePdf(r,no){
+  const {jsPDF}=window.jspdf;const doc=new jsPDF({unit:'pt',format:'letter'});const W=612,L=54,R=558;let y=60;const F=D.firm;
+  const navy=[27,42,65],gold=[184,150,62],grey=[107,114,128],line=[217,212,199];
+  const txt=(s,x,yy,o={})=>{doc.setFont('helvetica',o.b?'bold':'normal');doc.setFontSize(o.s||10);doc.setTextColor(...(o.c||[31,41,55]));doc.text(String(s),x,yy,{align:o.a||'left'})};
+  const rule=(yy,c=line)=>{doc.setDrawColor(...c);doc.setLineWidth(0.6);doc.line(L,yy,R,yy)};
+  doc.setFillColor(...gold);doc.rect(0,0,W,6,'F');
+  txt(F.name,L,y,{s:18,b:1,c:navy});txt('Advisory fee invoice',L,y+16,{s:10,c:grey});
+  [F.addr,[F.phone,F.email].filter(Boolean).join('  ·  ')].filter(Boolean).forEach((s,i)=>txt(s,R,y+i*13,{s:9,c:grey,a:'right'}));
+  y+=48;rule(y,navy);y+=22;
+  txt('Invoice',L,y,{s:9,c:grey});txt(no,L,y+14,{s:11,b:1});
+  txt('Invoice date',220,y,{s:9,c:grey});txt(new Date().toLocaleDateString('en-US',{year:'numeric',month:'short',day:'numeric'}),220,y+14,{s:11});
+  txt('Billing period',380,y,{s:9,c:grey});txt(fm(r.month)+' ('+r.days+' days)',380,y+14,{s:11});
+  y+=40;txt('Bill to',L,y,{s:9,c:grey});txt(r.clientName,L,y+14,{s:12,b:1});
+  txt('Values as of',380,y,{s:9,c:grey});txt(fd(r.vd),380,y+14,{s:11});
+  y+=48;doc.setFillColor(247,245,239);doc.rect(L,y,R-L,58,'F');
+  txt('Advisory fee due',L+14,y+20,{s:9,c:grey});txt(money(r.fee),L+14,y+44,{s:22,b:1,c:navy});
+  txt(money(r.billable)+' billable  ×  '+pct(r.rate)+' effective annual rate  ÷ 365  ×  '+r.days+' days',R-14,y+38,{s:9,c:grey,a:'right'});
+  y+=84;
+  const table=(head,rows,foot,cols)=>{txt(head,L,y,{s:11,b:1,c:navy});y+=10;rule(y,navy);y+=14;
+    cols.forEach(c=>txt(c.h,c.x,y,{s:8,c:grey,a:c.a}));y+=6;rule(y);y+=14;
+    rows.forEach(rw=>{cols.forEach((c,i)=>txt(rw[i],c.x,y,{s:9.5,a:c.a,b:c.b}));y+=15;if(y>720){doc.addPage();y=60}});
+    if(foot){rule(y-9,navy);cols.forEach((c,i)=>txt(foot[i],c.x,y+4,{s:9.5,b:1,a:c.a}));y+=18}y+=22};
+  table('Accounts',r.lines.map(l=>[l.label,money(l.mv),l.excl?'-'+money(l.excl):'',money(l.billable)]),['Total',money(r.gross),r.exclT?'-'+money(r.exclT):'',money(r.billable)],
+    [{h:'Account',x:L},{h:'Market value',x:360,a:'right'},{h:'Excluded',x:455,a:'right'},{h:'Billable',x:R,a:'right'}]);
+  if(r.exclList.length)table('Excluded positions',r.exclList.map(e=>[e.acct,e.secId+(e.desc?'  '+e.desc:''),money(e.value)]),null,
+    [{h:'Account',x:L},{h:'Security',x:230},{h:'Value',x:R,a:'right'}]);
+  table('Fee calculation',r.tiers.map(t=>[money(t.min)+(t.max==null?' and above':' to '+money(t.max)),pct(t.rate),money(t.slice),money(t.fee)]).concat([['Annual fee on billable value','','',money(r.annual)],['÷ 365 × '+r.days+' days','','',money(r.fee)]]),null,
+    [{h:'Tier',x:L},{h:'Annual rate',x:330,a:'right'},{h:'In tier',x:440,a:'right'},{h:'Annual fee',x:R,a:'right'}]);
+  if(F.terms){rule(y);y+=16;txt(F.terms,L,y,{s:9,c:grey})}
+  txt('Ref '+r.id.slice(0,8)+'  ·  Generated '+new Date().toLocaleString(),L,770,{s:7.5,c:grey});
+  return doc.output('blob')}
+
+boot();
 </script>
 </body>
 </html>
