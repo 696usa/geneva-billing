@@ -62,13 +62,14 @@ window.onunhandledrejection=e=>{const b=document.getElementById('errbar');b.styl
 const CFG_KEY='geneva-billing-cfg';
 let sb=null,D=fresh();
 function fresh(){return{clients:[],accounts:[],tiers:[],excl:[],positions:[],runs:[],invoices:[],mapping:null,cashSyms:['CASH'],mmSyms:[],nextInv:1,firm:{name:'Geneva Financial Group',addr:'',phone:'',email:'',terms:'Fee is debited from the account or payable within 30 days.'}}}
-function cfg(){try{return JSON.parse(localStorage.getItem(CFG_KEY))}catch{return null}}
+const DEFAULT_CFG={url:'https://dfspitfvrwzxwmsdmwwr.supabase.co',key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRmc3BpdGZ2cnd6eHdtc2Rtd3dyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg1MjQ5NTYsImV4cCI6MjEwNDEwMDk1Nn0.gOovT-TPYm8dVn_KjY-JpqHBzvrz2lLoSgF9CuW_oOc'};
+function cfg(){try{return JSON.parse(localStorage.getItem(CFG_KEY))||DEFAULT_CFG}catch{return DEFAULT_CFG}}
 function gate(html){document.getElementById('gate').innerHTML=html?`<div class="gate"><div class="card">${html}</div></div>`:'';document.getElementById('hdr').style.display=html?'none':'';document.getElementById('nav').style.display=html?'none':''}
 function showSetup(msg){gate(`<h2>Connect to Supabase</h2><div class="muted">${msg||'Enter the project URL and anon key from Supabase → Project Settings → API. This is saved on this device only.'}</div>
   <div class="f"><label>Project URL</label><input id="cu" placeholder="https://xxxx.supabase.co" value="${esc(cfg()?.url||'')}"></div>
   <div class="f"><label>Anon public key</label><input id="ck" placeholder="eyJ..." value="${esc(cfg()?.key||'')}"></div>
   <button class="btn" onclick="saveCfg()">Continue</button>`)}
-function saveCfg(){const url=document.getElementById('cu').value.trim().replace(/\/$/,''),key=document.getElementById('ck').value.trim();if(!/^https:\/\/.+\.supabase\.co$/.test(url)||!key.startsWith('ey'))return showSetup('That does not look right — the URL should end in .supabase.co and the key starts with "ey".');localStorage.setItem(CFG_KEY,JSON.stringify({url,key}));boot()}
+function saveCfg(){const url=document.getElementById('cu').value.trim().replace(/\/$/,''),key=document.getElementById('ck').value.trim();if(!/^https:\/\/.+\.supabase\.co$/.test(url)||!(key.startsWith('ey')||key.startsWith('sb_')))return showSetup('That does not look right — the URL should end in .supabase.co and the key starts with "ey".');localStorage.setItem(CFG_KEY,JSON.stringify({url,key}));boot()}
 function showLogin(msg){gate(`<h2>Sign in</h2>${msg?`<div class="err">${esc(msg)}</div>`:''}<div class="f"><label>Email</label><input id="le" type="email" autocomplete="username"></div><div class="f"><label>Password</label><input id="lp" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')signIn()"></div><button class="btn" onclick="signIn()">Sign in</button><div class="muted" style="margin-top:14px"><button class="link" onclick="localStorage.removeItem(CFG_KEY);boot()">Change Supabase project</button></div>`)}
 async function signIn(){const{error}=await sb.auth.signInWithPassword({email:document.getElementById('le').value.trim(),password:document.getElementById('lp').value});if(error)return showLogin(error.message);boot()}
 async function signOut(){await sb.auth.signOut();boot()}
