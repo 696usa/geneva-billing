@@ -61,7 +61,7 @@ window.onunhandledrejection=e=>{const b=document.getElementById('errbar');b.styl
 // ---------- Supabase connection ----------
 const CFG_KEY='geneva-billing-cfg';
 let sb=null,D=fresh();
-function fresh(){return{clients:[],accounts:[],tiers:[],excl:[],positions:[],runs:[],invoices:[],mapping:null,cashSyms:['CASH'],mmSyms:[],nextInv:1,firm:{name:'Geneva Financial Group',addr:'',phone:'',email:'',terms:'Fee is debited from the account or payable within 30 days.'}}}
+function fresh(){return{clients:[],accounts:[],tiers:[],excl:[],positions:[],runs:[],invoices:[],activity:[],batches:[],mapping:null,cashSyms:['CASH'],mmSyms:[],nextInv:1,firm:{name:'Geneva Financial Group',addr:'',phone:'',email:'',terms:'Fee is debited from the account or payable within 30 days.'}}}
 const DEFAULT_CFG={url:'https://dfspitfvrwzxwmsdmwwr.supabase.co',key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRmc3BpdGZ2cnd6eHdtc2Rtd3dyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg1MjQ5NTYsImV4cCI6MjEwNDEwMDk1Nn0.gOovT-TPYm8dVn_KjY-JpqHBzvrz2lLoSgF9CuW_oOc'};
 function cfg(){try{return JSON.parse(localStorage.getItem(CFG_KEY))||DEFAULT_CFG}catch{return DEFAULT_CFG}}
 function gate(html){document.getElementById('gate').innerHTML=html?`<div class="gate"><div class="card">${html}</div></div>`:'';document.getElementById('hdr').style.display=html?'none':'';document.getElementById('nav').style.display=html?'none':''}
@@ -82,7 +82,7 @@ async function boot(){const c=cfg();if(!c)return showSetup();
   gate('');render()}
 const q=(name,op)=>op.then(r=>{if(r.error)throw new Error(name+': '+r.error.message);return r.data});
 async function loadAll(){
-  const [c,a,t,e,p,r,i,s]=await Promise.all([q('clients',sb.from('clients').select('*')),q('accounts',sb.from('accounts').select('*')),q('fee_tiers',sb.from('fee_tiers').select('*')),q('exclusions',sb.from('exclusions').select('*')),q('positions',sb.from('positions').select('account_id,as_of,sec_id,descr,value').limit(50000)),q('billing_runs',sb.from('billing_runs').select('*')),q('invoices',sb.from('invoices').select('*')),q('settings',sb.from('settings').select('*'))]);
+  const [c,a,t,e,p,r,i,s,act,bat]=await Promise.all([q('clients',sb.from('clients').select('*')),q('accounts',sb.from('accounts').select('*')),q('fee_tiers',sb.from('fee_tiers').select('*')),q('exclusions',sb.from('exclusions').select('*')),q('positions',sb.from('positions').select('account_id,as_of,sec_id,descr,value').limit(50000)),q('billing_runs',sb.from('billing_runs').select('*')),q('invoices',sb.from('invoices').select('*')),q('settings',sb.from('settings').select('*')),q('activity',sb.from('activity').select('id,batch_id,account_id,trade_date,act_type,sec_id,descr,amount,quantity').limit(50000)).catch(()=>[]),q('activity_batches',sb.from('activity_batches').select('*')).catch(()=>[])]);
   D=fresh();
   D.clients=c.map(x=>({id:x.id,name:x.name,active:x.active,notes:x.notes}));
   D.accounts=a.map(x=>({id:x.id,client:x.client_id,custodian:x.custodian,number:x.number,nickname:x.nickname,active:x.active}));
@@ -92,6 +92,8 @@ async function loadAll(){
   D.runs=r.map(x=>({id:x.id,client:x.client_id,clientName:x.client_name,month:x.month,vd:x.as_of,days:x.days,gross:+x.gross,exclT:+x.excluded,billable:+x.billable,annual:+x.annual_fee,fee:+x.fee,rate:+x.eff_rate,lines:x.lines,exclList:x.excl_list,tiers:x.tiers,status:x.status,invoiceNo:x.invoice_no,created:x.created_at,finalized:x.finalized_at}));
   D.invoices=i.map(x=>({id:x.id,no:x.no,runId:x.run_id,client:x.client_id,clientName:x.client_name,month:x.month,fee:+x.fee,billable:+x.billable,path:x.path,created:x.created_at}));
   s.forEach(x=>{D[x.key]=x.value});
+  D.activity=act.map(x=>({id:x.id,batch:x.batch_id,account:x.account_id,date:x.trade_date,type:x.act_type,secId:x.sec_id,desc:x.descr,amount:x.amount==null?null:+x.amount,qty:x.quantity==null?null:+x.quantity}));
+  D.batches=bat.map(x=>({id:x.id,name:x.name,count:x.row_count,at:x.uploaded_at}));
 }
 function busy(on){document.getElementById('busy').style.display=on?'block':'none'}
 async function db(name,op){busy(true);try{return await q(name,op)}catch(e){const b=document.getElementById('errbar');b.style.display='block';b.textContent=e.message;throw e}finally{busy(false)}}
@@ -115,7 +117,7 @@ const lastMonth=()=>{const d=new Date();d.setDate(0);return d.toISOString().slic
 // ---------- routing ----------
 let view={p:'clients',id:null};
 function go(p,id=null){view={p,id};render()}
-const NAV=[['clients','Clients'],['positions','Positions'],['search','Search'],['cash','Cash'],['runs','Billing runs'],['invoices','Invoices']];
+const NAV=[['clients','Clients'],['positions','Positions'],['activity','Activity'],['search','Search'],['cash','Cash'],['runs','Billing runs'],['invoices','Invoices']];
 
 // ---------- fee math ----------
 function tiersFor(c){return D.tiers.filter(t=>t.client===c).sort((a,b)=>a.min-b.min)}
@@ -125,7 +127,7 @@ function isExcluded(clientId,accountId,secId){return D.excl.some(e=>e.client===c
 // ---------- render ----------
 function render(){
   document.getElementById('nav').innerHTML=NAV.map(([p,l])=>`<button class="${view.p===p?'on':''}" onclick="go('${p}')">${l}</button>`).join('');
-  document.getElementById('app').innerHTML=({clients:view.id?clientDetail:clients,positions:positions,search:search,cash:cash,runs:view.id?runDetail:runs,invoices:invoices})[view.p]();
+  document.getElementById('app').innerHTML=({clients:view.id?clientDetail:clients,positions:positions,activity:activity,search:search,cash:cash,runs:view.id?runDetail:runs,invoices:invoices})[view.p]();
   if(view.p==='invoices')loadInvoices();
 }
 
@@ -158,7 +160,7 @@ function clientDetail(){
   <div class="f"><label>Notes</label><textarea rows="2" onchange="upd('${c.id}','notes',this.value)">${esc(c.notes)}</textarea></div></div>
 
   <h3>Accounts</h3><p class="muted">Account numbers must match the spreadsheet (spaces and dashes are ignored).</p>
-  ${accts.length?`<table><thead><tr><th>Custodian</th><th>Number</th><th>Nickname</th><th></th></tr></thead><tbody>${accts.map(a=>`<tr><td>${a.custodian}</td><td>${esc(a.number)}</td><td>${esc(a.nickname)}</td><td class="n"><button class="btn g s" onclick="toggleAcct('${a.id}')">${a.active?'Deactivate':'Reactivate'}</button></td></tr>`).join('')}</tbody></table>`:''}
+  ${accts.length?`<table><thead><tr><th>Custodian</th><th>Number</th><th>Nickname</th><th></th></tr></thead><tbody>${accts.map(a=>`<tr><td>${a.custodian}</td><td>${esc(a.number)}</td><td>${esc(a.nickname)}</td><td class="n"><button class="btn g s" onclick="toggleAcct('${a.id}')">${a.active?'Deactivate':'Reactivate'}</button> <button class="btn d s" onclick="delAcct('${a.id}')">Delete</button></td></tr>`).join('')}</tbody></table>`:''}
   <div class="panel" style="margin-top:10px"><div class="row"><div class="f"><label>Custodian</label><select id="ac">${['Schwab','Pershing','IBKR','Other'].map(o=>`<option>${o}</option>`).join('')}</select></div><div class="f"><label>Account number</label><input id="an"></div></div>
   <div class="f"><label>Nickname</label><input id="ak" placeholder="e.g. Joint taxable"></div><button class="btn" onclick="addAcct('${c.id}')">Add account</button></div>
 
@@ -177,10 +179,18 @@ function clientDetail(){
   ${unexcl.length?`<div class="f"><label>Or tick securities currently held by this client</label><div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">${unexcl.map(s=>`<label style="display:flex;gap:6px;align-items:center;font-size:14px;color:var(--text)"><input type="checkbox" class="exchk" value="${esc(s.id)}" style="width:auto"><span><b>${esc(s.id)}</b> <span class="muted">${esc(s.desc)}</span></span></label>`).join('')}</div></div>`:''}
   <div class="row"><div class="f"><label>Applies to</label><select id="ea"><option value="">All accounts</option>${accts.filter(a=>a.active).map(a=>`<option value="${a.id}">${esc(acctName(a))}</option>`).join('')}</select></div>
   <div class="f"><label>Note</label><input id="en" placeholder="e.g. Legacy holding, not advised"></div></div>
-  <button class="btn" onclick="addExcl('${c.id}')">Add exclusions</button></div>`;
+  <button class="btn" onclick="addExcl('${c.id}')">Add exclusions</button></div>
+  <h3>Danger zone</h3><div class="panel"><p class="muted">Deleting removes this client, all accounts, positions, exclusions and activity. Not possible while billing runs or invoices exist — void/delete those first, or just mark the client inactive.</p><button class="btn d" onclick="delClient('${c.id}')">Delete client</button></div>`;
 }
 async function upd(id,k,v){const c=D.clients.find(x=>x.id===id);await db('clients',sb.from('clients').update({[k]:v}).eq('id',id));c[k]=v;if(k==='name')render()}
 async function addAcct(c){const number=document.getElementById('an').value.trim();if(!number)return;if(D.accounts.some(a=>normNum(a.number)===normNum(number)))return alert('That account number already exists.');const a={id:uid(),client:c,custodian:document.getElementById('ac').value,number,nickname:document.getElementById('ak').value.trim(),active:true};await db('accounts',sb.from('accounts').insert({id:a.id,client_id:c,custodian:a.custodian,number,nickname:a.nickname}));D.accounts.push(a);render()}
+async function delAcct(id){const a=D.accounts.find(x=>x.id===id);const n=D.positions.filter(p=>p.account===id).length,m=D.activity.filter(p=>p.account===id).length;
+  if(!confirm(`Delete account ${acctName(a)}?\nThis also removes ${n} position rows and ${m} activity rows.`))return;
+  await db('accounts',sb.from('accounts').delete().eq('id',id));D.accounts=D.accounts.filter(x=>x.id!==id);D.positions=D.positions.filter(p=>p.account!==id);D.activity=D.activity.filter(p=>p.account!==id);D.excl=D.excl.filter(e=>e.account!==id);render()}
+async function delClient(id){const c=D.clients.find(x=>x.id===id);if(D.runs.some(r=>r.client===id)||D.invoices.some(i=>i.client===id))return alert('This client has billing runs or invoices. Delete the draft runs and void/delete invoices first, or mark the client inactive instead.');
+  if(!confirm(`Delete ${c.name} and everything under it? This cannot be undone.`))return;
+  await db('clients',sb.from('clients').delete().eq('id',id));const ids=D.accounts.filter(a=>a.client===id).map(a=>a.id);
+  D.clients=D.clients.filter(x=>x.id!==id);D.accounts=D.accounts.filter(a=>a.client!==id);D.tiers=D.tiers.filter(t=>t.client!==id);D.excl=D.excl.filter(e=>e.client!==id);D.positions=D.positions.filter(p=>!ids.includes(p.account));D.activity=D.activity.filter(p=>!ids.includes(p.account));go('clients')}
 async function toggleAcct(id){const a=D.accounts.find(x=>x.id===id);await db('accounts',sb.from('accounts').update({active:!a.active}).eq('id',id));a.active=!a.active;render()}
 async function addTier(c){const r=document.getElementById('trate').value;if(r==='')return;const mx=document.getElementById('tmax').value;const t={id:uid(),client:c,min:Number(document.getElementById('tmin').value||0),max:mx===''?null:Number(mx),rate:Number(r)/100};await db('fee_tiers',sb.from('fee_tiers').insert({id:t.id,client_id:c,tier_min:t.min,tier_max:t.max,annual_rate:t.rate}));D.tiers.push(t);render()}
 async function delTier(id){await db('fee_tiers',sb.from('fee_tiers').delete().eq('id',id));D.tiers=D.tiers.filter(t=>t.id!==id);render()}
@@ -239,7 +249,8 @@ function positions(){
   let html=`<h2>Positions</h2><p class="muted">Upload the month-end position spreadsheet once a month. Each row: account number, security ID, market value.</p>
   <div class="panel"><div class="row"><div class="f"><label>Month</label><input type="month" value="${pdate}" onchange="pdate=this.value;pending=null;render()"></div>
   <div class="f"><label>Spreadsheet (.xlsx or .csv)</label><input type="file" accept=".xlsx,.xls,.csv" onchange="readSheet(this)"></div></div>
-  <div class="muted">Values will be stored as of ${fd(me)}.${pos.length?` This month already has ${pos.length} positions; uploading again replaces them.`:''}</div></div>`;
+  <div class="muted">Values will be stored as of ${fd(me)}.${pos.length?` This month already has ${pos.length} positions; uploading again replaces them.`:''}</div>
+  ${pos.length?`<div class="acts"><button class="btn d s" onclick="delMonth('${me}')">Delete all ${pos.length} positions for ${fm(pdate)}</button></div>`:''}</div>`;
   if(pending){
     const m=pending.map;
     html+=`<div class="panel"><b>${esc(pending.name)}</b> — ${pending.rows.length} rows. Match the columns:
@@ -283,6 +294,7 @@ function preview(){const m=pending.map;if(!m.account||!m.secId||!m.value)return`
   ${bad.length?`<div class="err">${bad.length} row${bad.length===1?'':'s'} with unreadable values skipped: ${bad.slice(0,5).map(esc).join('; ')}${bad.length>5?'…':''}</div>`:''}
   <div class="ok">${out.length} positions ready, total ${money(total)}, as of ${fd(monthEnd(pdate))}.</div>
   <button class="btn" onclick="commitPending()" ${out.length?'':'disabled'}>Save ${out.length} positions for ${fm(pdate)}</button>`}
+async function delMonth(me){if(!confirm('Delete every position dated '+fd(me)+'?'))return;await db('positions',sb.from('positions').delete().eq('as_of',me));D.positions=D.positions.filter(p=>p.date!==me);render()}
 async function commitPending(){const{out}=parsePending();const me=monthEnd(pdate);await db('positions',sb.from('positions').delete().eq('as_of',me));for(let i=0;i<out.length;i+=500)await db('positions',sb.from('positions').insert(out.slice(i,i+500).map(p=>({account_id:p.account,as_of:p.date,sec_id:p.secId,descr:p.desc,value:p.value}))));D.positions=D.positions.filter(p=>p.date!==me).concat(out);D.mapping={...pending.map};await setSetting('mapping',D.mapping);pending=null;render()}
 
 // ---------- billing runs ----------
@@ -325,7 +337,8 @@ function runDetail(){
   return `<button class="link" onclick="go('runs')">All runs</button>
   <div class="acts"><span class="pill ${r.status}" style="align-self:center">${r.status}</span><button class="btn g" onclick="print()">Print / PDF</button>
   ${r.status==='draft'?`<button class="btn d" onclick="delRun('${r.id}')">Delete draft</button><button class="btn" onclick="finalizeRun('${r.id}')">Finalize</button>`:''}
-  ${r.status==='final'?`<button class="btn g" onclick="openInvoiceByRun('${r.id}')">Open invoice ${esc(r.invoiceNo||'')}</button><button class="btn d" onclick="voidRun('${r.id}')">Void</button>`:''}</div>
+  ${r.status==='final'?`<button class="btn g" onclick="openInvoiceByRun('${r.id}')">Open invoice ${esc(r.invoiceNo||'')}</button><button class="btn d" onclick="voidRun('${r.id}')">Void</button>`:''}
+  ${r.status==='void'?`<button class="btn d" onclick="delVoid('${r.id}')">Delete voided run</button>`:''}</div>
   <div class="stmt"><div class="firm">Geneva Financial Group<small>Advisory fee statement</small></div>
   <div class="meta">${esc(r.clientName)}<br>${fm(r.month)} · ${r.days} days<br>Values as of ${fd(r.vd)}</div>
   <div class="muted" style="margin-top:18px">Advisory fee</div><div class="amt">${money(r.fee)}</div>
@@ -348,7 +361,57 @@ async function finalizeRun(id){if(!confirm('Finalize this run and create the inv
   const fin=new Date().toISOString();await db('billing_runs',sb.from('billing_runs').update({status:'final',invoice_no:no,finalized_at:fin}).eq('id',id));
   D.invoices.push(inv);r.status='final';r.finalized=fin;r.invoiceNo=no;D.nextInv++;await setSetting('nextInv',D.nextInv);render()}
 async function voidRun(id){if(!confirm('Void this run? It stays in history marked void.'))return;await db('billing_runs',sb.from('billing_runs').update({status:'void'}).eq('id',id));D.runs.find(x=>x.id===id).status='void';render()}
+async function delVoid(id){if(D.invoices.some(i=>i.runId===id))return alert('Delete its invoice first (Invoices tab).');if(!confirm('Permanently delete this voided run?'))return;await db('billing_runs',sb.from('billing_runs').delete().eq('id',id));D.runs=D.runs.filter(r=>r.id!==id);go('runs')}
 async function delRun(id){if(!confirm('Delete this draft?'))return;await db('billing_runs',sb.from('billing_runs').delete().eq('id',id));D.runs=D.runs.filter(r=>r.id!==id);go('runs')}
+
+// ---------- activity: upload + search ----------
+let apending=null,aF={from:'',to:'',type:'',sec:'',client:''};
+const AFIELDS=[['date','Date'],['account','Account number'],['type','Activity type'],['secId','Security ID (optional)'],['desc','Description (optional)'],['amount','Amount (optional)'],['qty','Quantity (optional)']];
+function aguess(h){h=h.toLowerCase();if(/date/.test(h))return'date';if(/acc(oun)?t/.test(h)&&!/name|type/.test(h))return'account';if(/type|activity|transaction|action/.test(h))return'type';if(/cusip|symbol|ticker|security\s*id|sec\s*id/.test(h))return'secId';if(/desc|memo|name/.test(h))return'desc';if(/amount|net|total|value|cash/.test(h))return'amount';if(/qty|quantity|shares|units/.test(h))return'qty';return''}
+function toDate(v){if(v instanceof Date)return isNaN(v)?null:v.toISOString().slice(0,10);if(typeof v==='number'){const d=XLSX.SSF.parse_date_code(v);if(d)return`${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`}const s=String(v).trim();let m;if((m=s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/)))return`${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;if((m=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})/))){const y=m[3].length===2?'20'+m[3]:m[3];return`${y}-${m[1].padStart(2,'0')}-${m[2].padStart(2,'0')}`}const d=new Date(s);return isNaN(d)?null:d.toISOString().slice(0,10)}
+function readActSheet(inp){const f=inp.files[0];if(!f)return;const r=new FileReader();
+  r.onload=e=>{let rows;try{const wb=XLSX.read(e.target.result,{type:'array',cellDates:true});rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:''})}catch(err){return alert('Could not read file: '+err.message)}
+    rows=rows.filter(r=>r.some(c=>String(c).trim()!==''));if(rows.length<2)return alert('No data rows found.');
+    let hi=rows.findIndex(r=>r.filter(c=>String(c).trim()!=='').length>=3);if(hi<0)hi=0;const headers=rows[hi].map((h,i)=>String(h).trim()||`Column ${i+1}`);
+    const data=rows.slice(hi+1).map(r=>Object.fromEntries(headers.map((h,i)=>[h,r[i]])));
+    const map={date:'',account:'',type:'',secId:'',desc:'',amount:'',qty:''};
+    if(D.actMapping&&Object.values(D.actMapping).every(v=>!v||headers.includes(v)))Object.assign(map,D.actMapping);else headers.forEach(h=>{const g=aguess(h);if(g&&!map[g])map[g]=h});
+    apending={name:f.name,headers,rows:data,map};render()};
+  r.readAsArrayBuffer(f);inp.value=''}
+function parseAct(){const m=apending.map;const out=[],unmatched=new Set(),bad=[];
+  for(const r of apending.rows){const num=normNum(r[m.account]);if(!num)continue;const a=D.accounts.find(x=>normNum(x.number)===num);if(!a){unmatched.add(String(r[m.account]));continue}
+    const date=toDate(r[m.date]);if(!date){bad.push('bad date "'+r[m.date]+'"');continue}
+    out.push({account:a.id,date,type:String(r[m.type]??'').trim()||'Other',secId:m.secId?normSec(r[m.secId]):'',desc:m.desc?String(r[m.desc]??'').trim():'',amount:m.amount?toNum(r[m.amount]):null,qty:m.qty?toNum(r[m.qty]):null})}
+  return{out,unmatched:[...unmatched],bad}}
+function activity(){
+  const types=[...new Set(D.activity.map(x=>x.type))].sort();
+  let html=`<h2>Activity</h2><p class="muted">Upload transaction exports for any period. Each upload is kept as a batch you can delete.</p>
+  <div class="panel"><label class="btn g" style="display:inline-block">Upload activity spreadsheet<input type="file" accept=".xlsx,.xls,.csv" hidden onchange="readActSheet(this)"></label>
+  ${D.batches.length?`<table style="margin-top:12px"><thead><tr><th>Batch</th><th>Uploaded</th><th class="n">Rows</th><th></th></tr></thead><tbody>${D.batches.slice().sort((a,b)=>b.at.localeCompare(a.at)).map(b=>`<tr><td>${esc(b.name)}</td><td>${new Date(b.at).toLocaleDateString()}</td><td class="n">${b.count}</td><td class="n"><button class="btn d s" onclick="delBatch('${b.id}')">Delete</button></td></tr>`).join('')}</tbody></table>`:''}</div>`;
+  if(apending){const m=apending.map;
+    html+=`<div class="panel"><b>${esc(apending.name)}</b> — ${apending.rows.length} rows. Match the columns:<div class="row" style="margin-top:10px">${AFIELDS.map(([k,l])=>`<div class="f"><label>${l}</label><select onchange="apending.map.${k}=this.value;render()"><option value="">—</option>${apending.headers.map(h=>`<option ${m[k]===h?'selected':''}>${esc(h)}</option>`).join('')}</select></div>`).join('')}</div>`;
+    if(!m.date||!m.account||!m.type)html+=`<div class="note">Pick the date, account and activity type columns.</div>`;
+    else{const{out,unmatched,bad}=parseAct();const ds=out.map(x=>x.date).sort();
+      html+=`${unmatched.length?`<div class="err">${unmatched.length} account number${unmatched.length===1?'':'s'} not set up — rows skipped: ${unmatched.slice(0,8).map(esc).join(', ')}${unmatched.length>8?'…':''}</div>`:''}${bad.length?`<div class="err">${bad.length} rows skipped: ${bad.slice(0,4).map(esc).join('; ')}</div>`:''}
+      <div class="ok">${out.length} activity rows ready${ds.length?`, ${fd(ds[0])} to ${fd(ds[ds.length-1])}`:''}.</div><button class="btn" onclick="commitAct()" ${out.length?'':'disabled'}>Save batch</button> `}
+    html+=`<button class="btn g" onclick="apending=null;render()">Cancel</button></div>`}
+  const f=aF;const rows=D.activity.filter(x=>(!f.from||x.date>=f.from)&&(!f.to||x.date<=f.to)&&(!f.type||x.type===f.type)&&(!f.sec||normSec(x.secId).includes(normSec(f.sec))||x.desc.toLowerCase().includes(f.sec.toLowerCase()))&&(!f.client||acctOf(x.account)?.client===f.client)).sort((a,b)=>b.date.localeCompare(a.date));
+  const amt=rows.reduce((s,x)=>s+(x.amount||0),0);
+  html+=`<h3>Search</h3><div class="panel"><div class="row"><div class="f"><label>From</label><input type="date" value="${f.from}" onchange="aF.from=this.value;render()"></div><div class="f"><label>To</label><input type="date" value="${f.to}" onchange="aF.to=this.value;render()"></div></div>
+  <div class="row"><div class="f"><label>Activity type</label><select onchange="aF.type=this.value;render()"><option value="">All types</option>${types.map(t=>`<option ${f.type===t?'selected':''}>${esc(t)}</option>`).join('')}</select></div>
+  <div class="f"><label>Client</label><select onchange="aF.client=this.value;render()"><option value="">All clients</option>${D.clients.slice().sort((a,b)=>a.name.localeCompare(b.name)).map(c=>`<option value="${c.id}" ${f.client===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></div></div>
+  <div class="f"><label>Security ID or description</label><input id="asec" value="${esc(f.sec)}" placeholder="e.g. SPY, 037833100" oninput="aF.sec=this.value;render();const i=document.getElementById('asec');i.focus();i.setSelectionRange(999,999)"></div>
+  <div class="muted">${rows.length} row${rows.length===1?'':'s'} · net amount ${money(amt)}${(f.from||f.to||f.type||f.sec||f.client)?` · <button class="link" onclick="aF={from:'',to:'',type:'',sec:'',client:''};render()">Clear filters</button>`:''}</div></div>
+  ${rows.length?`<div class="wrap"><table><thead><tr><th>Date</th><th>Client · account</th><th>Type</th><th>Security</th><th class="n">Qty</th><th class="n">Amount</th></tr></thead><tbody>${rows.slice(0,500).map(x=>{const a=acctOf(x.account);return`<tr><td>${fd(x.date)}</td><td>${a?esc(cName(a.client))+' <span class="muted">'+esc(acctName(a))+'</span>':''}</td><td>${esc(x.type)}</td><td>${x.secId?'<b>'+esc(x.secId)+'</b> ':''}<span class="muted">${esc(x.desc)}</span></td><td class="n">${x.qty==null?'':x.qty}</td><td class="n">${x.amount==null?'':money(x.amount)}</td></tr>`}).join('')}</tbody></table>${rows.length>500?`<p class="muted">Showing first 500 of ${rows.length}. Narrow the filters to see the rest.</p>`:''}</div>`:D.activity.length?`<div class="empty">No activity matches.</div>`:''}`;
+  return html;
+}
+async function commitAct(){const{out}=parseAct();const b={id:uid(),name:apending.name,count:out.length,at:new Date().toISOString()};
+  await db('activity_batches',sb.from('activity_batches').insert({id:b.id,name:b.name,row_count:b.count}));
+  const rows=out.map(x=>({id:uid(),batch_id:b.id,account_id:x.account,trade_date:x.date,act_type:x.type,sec_id:x.secId,descr:x.desc,amount:x.amount,quantity:x.qty}));
+  for(let i=0;i<rows.length;i+=500)await db('activity',sb.from('activity').insert(rows.slice(i,i+500)));
+  D.batches.push(b);D.activity.push(...rows.map(r=>({id:r.id,batch:b.id,account:r.account_id,date:r.trade_date,type:r.act_type,secId:r.sec_id,desc:r.descr,amount:r.amount,qty:r.quantity})));
+  D.actMapping={...apending.map};await setSetting('actMapping',D.actMapping);apending=null;render()}
+async function delBatch(id){const b=D.batches.find(x=>x.id===id);if(!confirm('Delete batch "'+b.name+'" and its '+b.count+' rows?'))return;await db('activity_batches',sb.from('activity_batches').delete().eq('id',id));D.batches=D.batches.filter(x=>x.id!==id);D.activity=D.activity.filter(x=>x.batch!==id);render()}
 
 // ---------- search across all clients ----------
 let sQ='',sMonth=null,cMonth=null;
@@ -408,6 +471,8 @@ function loadInvoices(){}
 async function invUrl(i){const{data,error}=await sb.storage.from('invoices').createSignedUrl(i.path,120);if(error)throw new Error(error.message);return data.signedUrl}
 async function openInvoice(id){const i=D.invoices.find(x=>x.id===id);if(!i)return;const w=window.open('','_blank');w.location=await invUrl(i)}
 async function dlInvoice(id){const i=D.invoices.find(x=>x.id===id);if(!i)return;const{data,error}=await sb.storage.from('invoices').download(i.path);if(error)return alert(error.message);const a=document.createElement('a');a.href=URL.createObjectURL(data);a.download=i.no+'.pdf';a.click()}
+async function delInvoice(id){const i=D.invoices.find(x=>x.id===id);if(!confirm('Delete invoice '+i.no+'? The billing run stays; you can void it separately.'))return;
+  await sb.storage.from('invoices').remove([i.path]);await db('invoices',sb.from('invoices').delete().eq('id',id));D.invoices=D.invoices.filter(x=>x.id!==id);render()}
 async function openInvoiceByRun(runId){const i=D.invoices.find(x=>x.runId===runId);if(i)openInvoice(i.id);else alert('No invoice stored for this run.')}
 function invoices(){
   const q=invQ.toLowerCase();
@@ -415,7 +480,7 @@ function invoices(){
   const F=D.firm;
   return `<h2>Invoices</h2><p class="muted">Created automatically when a billing run is finalized. Stored in Supabase.</p>
   <div class="panel"><input placeholder="Search by invoice no., client, month or amount" value="${esc(invQ)}" oninput="invQ=this.value;document.getElementById('app').innerHTML=invoices();document.querySelector('main input').focus();document.querySelector('main input').setSelectionRange(99,99)"></div>
-  ${rows.length?`<table><thead><tr><th>Invoice</th><th>Client</th><th>Month</th><th class="n">Fee</th><th></th></tr></thead><tbody>${rows.map(i=>`<tr><td><b>${esc(i.no)}</b><div class="muted">${new Date(i.created).toLocaleDateString()}</div></td><td>${esc(i.clientName)}</td><td>${fm(i.month)}</td><td class="n">${money(i.fee)}</td><td class="n"><button class="btn g s" onclick="openInvoice('${i.id}')">Open</button> <button class="btn g s" onclick="dlInvoice('${i.id}')">Save</button></td></tr>`).join('')}</tbody></table>`:`<div class="empty">${invCache.length?'No invoices match.':'No invoices yet. Finalize a billing run to create one.'}</div>`}
+  ${rows.length?`<table><thead><tr><th>Invoice</th><th>Client</th><th>Month</th><th class="n">Fee</th><th></th></tr></thead><tbody>${rows.map(i=>`<tr><td><b>${esc(i.no)}</b><div class="muted">${new Date(i.created).toLocaleDateString()}</div></td><td>${esc(i.clientName)}</td><td>${fm(i.month)}</td><td class="n">${money(i.fee)}</td><td class="n"><button class="btn g s" onclick="openInvoice('${i.id}')">Open</button> <button class="btn g s" onclick="dlInvoice('${i.id}')">Save</button> <button class="btn d s" onclick="delInvoice('${i.id}')">Delete</button></td></tr>`).join('')}</tbody></table>`:`<div class="empty">${invCache.length?'No invoices match.':'No invoices yet. Finalize a billing run to create one.'}</div>`}
   <h3>Invoice header</h3><div class="panel"><div class="f"><label>Firm name</label><input value="${esc(F.name)}" onchange="D.firm.name=this.value;setSetting('firm',D.firm)"></div>
   <div class="f"><label>Address</label><input value="${esc(F.addr)}" onchange="D.firm.addr=this.value;setSetting('firm',D.firm)" placeholder="Street, City, ST ZIP"></div>
   <div class="row"><div class="f"><label>Phone</label><input value="${esc(F.phone)}" onchange="D.firm.phone=this.value;setSetting('firm',D.firm)"></div><div class="f"><label>Email</label><input value="${esc(F.email)}" onchange="D.firm.email=this.value;setSetting('firm',D.firm)"></div></div>
