@@ -133,7 +133,9 @@ function render(){
 function clients(){
   const rows=D.clients.slice().sort((a,b)=>a.name.localeCompare(b.name));
   return `<h2>Clients</h2>
-  <div class="panel"><div class="f"><label>New client</label><input id="nc" placeholder="Household or entity name" onkeydown="if(event.key==='Enter')addClient()"></div><button class="btn" onclick="addClient()">Add client</button></div>
+  <div class="panel"><div class="f"><label>New client</label><input id="nc" placeholder="Household or entity name" onkeydown="if(event.key==='Enter')addClient()"></div><button class="btn" onclick="addClient()">Add client</button>
+  <span style="margin-left:14px" class="muted">or</span> <label class="btn g" style="display:inline-block;margin-left:6px">Import from spreadsheet<input type="file" accept=".xlsx,.xls,.csv" hidden onchange="readClientSheet(this)"></label></div>
+  ${cpending?clientImportPanel():''}
   ${rows.length?`<table><thead><tr><th>Client</th><th class="n">Accounts</th><th class="n">Tiers</th><th class="n">Excluded IDs</th></tr></thead><tbody>
   ${rows.map(c=>`<tr class="click" onclick="go('clients','${c.id}')"><td>${esc(c.name)}${c.active?'':' <span class=pill>inactive</span>'}</td><td class="n">${D.accounts.filter(a=>a.client===c.id).length}</td><td class="n">${tiersFor(c.id).length}</td><td class="n">${D.excl.filter(e=>e.client===c.id).length}</td></tr>`).join('')}
   </tbody></table>`:`<div class="empty">No clients yet. Add the first one above.</div>`}`;
@@ -189,6 +191,41 @@ async function addExcl(c){const typed=document.getElementById('es').value.split(
   const rows=[];for(const secId of ids){if(D.excl.some(e=>e.client===c&&normSec(e.secId)===secId&&(e.account||null)===account))continue;rows.push({id:uid(),client:c,account,secId,note})}
   if(!rows.length)return alert('Those securities are already excluded.');await db('exclusions',sb.from('exclusions').insert(rows.map(x=>({id:x.id,client_id:c,account_id:account,sec_id:x.secId,note}))));D.excl.push(...rows);render()}
 async function delExcl(id){await db('exclusions',sb.from('exclusions').delete().eq('id',id));D.excl=D.excl.filter(e=>e.id!==id);render()}
+
+// ---------- client bulk import ----------
+let cpending=null;
+const CFIELDS=[['client','Client name'],['custodian','Custodian (optional)'],['account','Account number'],['nickname','Account nickname (optional)'],['rate','Flat annual rate % (optional)']];
+function cguess(h){h=h.toLowerCase();if(/client|household|family|entity/.test(h))return'client';if(/custodian/.test(h))return'custodian';if(/nick|label|account\s*name|acct\s*name/.test(h))return'nickname';if(/acc(oun)?t/.test(h))return'account';if(/rate|fee|%/.test(h))return'rate';return''}
+function readClientSheet(inp){const f=inp.files[0];if(!f)return;const r=new FileReader();
+  r.onload=e=>{let rows;try{const wb=XLSX.read(e.target.result,{type:'array'});rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:''})}catch(err){return alert('Could not read file: '+err.message)}
+    rows=rows.filter(r=>r.some(c=>String(c).trim()!==''));if(rows.length<2)return alert('No data rows found.');
+    let hi=rows.findIndex(r=>r.filter(c=>String(c).trim()!=='').length>=2);if(hi<0)hi=0;const headers=rows[hi].map((h,i)=>String(h).trim()||`Column ${i+1}`);
+    const data=rows.slice(hi+1).map(r=>Object.fromEntries(headers.map((h,i)=>[h,r[i]])));
+    const map={client:'',custodian:'',account:'',nickname:'',rate:''};headers.forEach(h=>{const g=cguess(h);if(g&&!map[g])map[g]=h});
+    cpending={name:f.name,headers,rows:data,map};render()};
+  r.readAsArrayBuffer(f);inp.value=''}
+function parseClients(){const m=cpending.map;const clients={},accounts=[],skipped=[];
+  for(const r of cpending.rows){const name=String(r[m.client]??'').trim();const num=String(r[m.account]??'').trim();if(!name&&!num)continue;
+    if(!name){skipped.push('account '+num+' has no client name');continue}
+    const key=name.toLowerCase();const existing=D.clients.find(c=>c.name.toLowerCase()===key);
+    if(!clients[key])clients[key]={name,id:existing?existing.id:uid(),isNew:!existing,rate:m.rate&&r[m.rate]!==''?toNum(String(r[m.rate]).replace('%',''))/100:null};
+    if(num){if(D.accounts.some(a=>normNum(a.number)===normNum(num))||accounts.some(a=>normNum(a.number)===normNum(num))){skipped.push('account '+num+' already exists');continue}
+      const cust=m.custodian?String(r[m.custodian]??'').trim():'';accounts.push({id:uid(),client:clients[key].id,custodian:['Schwab','Pershing','IBKR'].find(x=>x.toLowerCase()===cust.toLowerCase())||(cust?'Other':'Other'),number:num,nickname:m.nickname?String(r[m.nickname]??'').trim():'',active:true})}}
+  return{clients:Object.values(clients),accounts,skipped}}
+function clientImportPanel(){const m=cpending.map;
+  const mapping=`<div class="panel"><b>${esc(cpending.name)}</b> — ${cpending.rows.length} rows. Match the columns:<div class="row" style="margin-top:10px">${CFIELDS.map(([k,l])=>`<div class="f"><label>${l}</label><select onchange="cpending.map.${k}=this.value;render()"><option value="">—</option>${cpending.headers.map(h=>`<option ${m[k]===h?'selected':''}>${esc(h)}</option>`).join('')}</select></div>`).join('')}</div>`;
+  if(!m.client)return mapping+`<div class="note">Pick the client name column.</div><button class="btn g" onclick="cpending=null;render()">Cancel</button></div>`;
+  const{clients,accounts,skipped}=parseClients();const nw=clients.filter(c=>c.isNew);
+  return mapping+`${skipped.length?`<div class="err">${skipped.length} row${skipped.length===1?'':'s'} skipped: ${skipped.slice(0,6).map(esc).join('; ')}${skipped.length>6?'…':''}</div>`:''}
+  <div class="ok">${nw.length} new client${nw.length===1?'':'s'}${clients.length-nw.length?` (${clients.length-nw.length} already exist, accounts will be added to them)`:''}, ${accounts.length} account${accounts.length===1?'':'s'}${m.rate?`, flat fee tiers for ${nw.filter(c=>c.rate).length}`:''}.</div>
+  <div class="wrap"><table><thead><tr><th>Client</th><th>Accounts</th>${m.rate?'<th class="n">Rate</th>':''}</tr></thead><tbody>${clients.map(c=>`<tr><td>${esc(c.name)}${c.isNew?'':' <span class="pill">existing</span>'}</td><td>${accounts.filter(a=>a.client===c.id).map(a=>esc(a.custodian+' '+a.number+(a.nickname?' ('+a.nickname+')':''))).join('<br>')||'<span class="muted">—</span>'}</td>${m.rate?`<td class="n">${c.rate!=null?pct(c.rate):''}</td>`:''}</tr>`).join('')}</tbody></table></div>
+  <div class="acts"><button class="btn" onclick="commitClients()" ${clients.length?'':'disabled'}>Import</button><button class="btn g" onclick="cpending=null;render()">Cancel</button></div></div>`}
+async function commitClients(){const{clients,accounts}=parseClients();const nw=clients.filter(c=>c.isNew);
+  if(nw.length)await db('clients',sb.from('clients').insert(nw.map(c=>({id:c.id,name:c.name}))));
+  if(accounts.length)await db('accounts',sb.from('accounts').insert(accounts.map(a=>({id:a.id,client_id:a.client,custodian:a.custodian,number:a.number,nickname:a.nickname}))));
+  const tiers=nw.filter(c=>c.rate!=null&&!isNaN(c.rate)).map(c=>({id:uid(),client:c.id,min:0,max:null,rate:c.rate}));
+  if(tiers.length)await db('fee_tiers',sb.from('fee_tiers').insert(tiers.map(t=>({id:t.id,client_id:t.client,tier_min:0,tier_max:null,annual_rate:t.rate}))));
+  nw.forEach(c=>D.clients.push({id:c.id,name:c.name,active:true,notes:''}));D.accounts.push(...accounts);D.tiers.push(...tiers);cpending=null;render()}
 
 // ---------- positions: upload + review ----------
 let pending=null;
