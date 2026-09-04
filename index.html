@@ -82,17 +82,17 @@ async function boot(){const c=cfg();if(!c)return showSetup();
   gate('');render()}
 const q=(name,op)=>op.then(r=>{if(r.error)throw new Error(name+': '+r.error.message);return r.data});
 async function loadAll(){
-  const [c,a,t,e,p,r,i,s,act,bat]=await Promise.all([q('clients',sb.from('clients').select('*')),q('accounts',sb.from('accounts').select('*')),q('fee_tiers',sb.from('fee_tiers').select('*')),q('exclusions',sb.from('exclusions').select('*')),q('positions',sb.from('positions').select('account_id,as_of,sec_id,descr,value').limit(50000)),q('billing_runs',sb.from('billing_runs').select('*')),q('invoices',sb.from('invoices').select('*')),q('settings',sb.from('settings').select('*')),q('activity',sb.from('activity').select('id,batch_id,account_id,trade_date,act_type,sec_id,descr,amount,quantity').limit(50000)).catch(()=>[]),q('activity_batches',sb.from('activity_batches').select('*')).catch(()=>[])]);
+  const [c,a,t,e,p,r,i,s,act,bat]=await Promise.all([q('clients',sb.from('clients').select('*')),q('accounts',sb.from('accounts').select('*')),q('fee_tiers',sb.from('fee_tiers').select('*')),q('exclusions',sb.from('exclusions').select('*')),q('positions',sb.from('positions').select('account_id,as_of,sec_id,cusip,descr,value').limit(50000)),q('billing_runs',sb.from('billing_runs').select('*')),q('invoices',sb.from('invoices').select('*')),q('settings',sb.from('settings').select('*')),q('activity',sb.from('activity').select('id,batch_id,account_id,trade_date,act_type,sec_id,cusip,descr,amount,quantity').limit(50000)).catch(()=>[]),q('activity_batches',sb.from('activity_batches').select('*')).catch(()=>[])]);
   D=fresh();
   D.clients=c.map(x=>({id:x.id,name:x.name,active:x.active,notes:x.notes}));
   D.accounts=a.map(x=>({id:x.id,client:x.client_id,custodian:x.custodian,number:x.number,nickname:x.nickname,active:x.active}));
   D.tiers=t.map(x=>({id:x.id,client:x.client_id,min:+x.tier_min,max:x.tier_max==null?null:+x.tier_max,rate:+x.annual_rate}));
   D.excl=e.map(x=>({id:x.id,client:x.client_id,account:x.account_id,secId:x.sec_id,note:x.note}));
-  D.positions=p.map(x=>({account:x.account_id,date:x.as_of,secId:x.sec_id,desc:x.descr,value:+x.value}));
+  D.positions=p.map(x=>({account:x.account_id,date:x.as_of,secId:x.sec_id,cusip:x.cusip||'',desc:x.descr,value:+x.value}));
   D.runs=r.map(x=>({id:x.id,client:x.client_id,clientName:x.client_name,month:x.month,vd:x.as_of,days:x.days,gross:+x.gross,exclT:+x.excluded,billable:+x.billable,annual:+x.annual_fee,fee:+x.fee,rate:+x.eff_rate,lines:x.lines,exclList:x.excl_list,tiers:x.tiers,status:x.status,invoiceNo:x.invoice_no,created:x.created_at,finalized:x.finalized_at}));
   D.invoices=i.map(x=>({id:x.id,no:x.no,runId:x.run_id,client:x.client_id,clientName:x.client_name,month:x.month,fee:+x.fee,billable:+x.billable,path:x.path,created:x.created_at}));
   s.forEach(x=>{D[x.key]=x.value});
-  D.activity=act.map(x=>({id:x.id,batch:x.batch_id,account:x.account_id,date:x.trade_date,type:x.act_type,secId:x.sec_id,desc:x.descr,amount:x.amount==null?null:+x.amount,qty:x.quantity==null?null:+x.quantity}));
+  D.activity=act.map(x=>({id:x.id,batch:x.batch_id,account:x.account_id,date:x.trade_date,type:x.act_type,secId:x.sec_id,cusip:x.cusip||'',desc:x.descr,amount:x.amount==null?null:+x.amount,qty:x.quantity==null?null:+x.quantity}));
   D.batches=bat.map(x=>({id:x.id,name:x.name,count:x.row_count,at:x.uploaded_at}));
 }
 function busy(on){document.getElementById('busy').style.display=on?'block':'none'}
@@ -122,7 +122,7 @@ const NAV=[['clients','Clients'],['positions','Positions'],['activity','Activity
 // ---------- fee math ----------
 function tiersFor(c){return D.tiers.filter(t=>t.client===c).sort((a,b)=>a.min-b.min)}
 function marginal(tiers,aum){return tiers.map(t=>{const top=t.max==null?aum:Math.min(t.max,aum);const slice=Math.max(0,top-t.min);return{...t,slice,fee:Math.round(slice*t.rate*100)/100}})}
-function isExcluded(clientId,accountId,secId){return D.excl.some(e=>e.client===clientId&&normSec(e.secId)===normSec(secId)&&(!e.account||e.account===accountId))}
+function isExcluded(clientId,accountId,secId,cusip){return D.excl.some(e=>e.client===clientId&&(normSec(e.secId)===normSec(secId)||(cusip&&normSec(e.secId)===normSec(cusip)))&&(!e.account||e.account===accountId))}
 
 // ---------- render ----------
 function render(){
@@ -180,6 +180,10 @@ function clientDetail(){
   <div class="row"><div class="f"><label>Applies to</label><select id="ea"><option value="">All accounts</option>${accts.filter(a=>a.active).map(a=>`<option value="${a.id}">${esc(acctName(a))}</option>`).join('')}</select></div>
   <div class="f"><label>Note</label><input id="en" placeholder="e.g. Legacy holding, not advised"></div></div>
   <button class="btn" onclick="addExcl('${c.id}')">Add exclusions</button></div>
+  <h3>Activity</h3>${(()=>{const ids=accts.map(a=>a.id);const rows=D.activity.filter(x=>ids.includes(x.account)).sort((a,b)=>b.date.localeCompare(a.date));if(!rows.length)return'<p class="muted">No activity uploaded for this client yet.</p>';
+    return `<p class="muted">${rows.length} rows on file. <button class="link" onclick="aF={from:'',to:'',type:'',sec:'',client:'${c.id}'};go('activity')">Search all of this client's activity</button></p><div class="wrap"><table><thead><tr><th>Date</th><th>Account</th><th>Type</th><th>Security</th><th class="n">Amount</th></tr></thead><tbody>${rows.slice(0,15).map(x=>{const a=accts.find(y=>y.id===x.account);return`<tr><td>${fd(x.date)}</td><td>${esc(acctName(a))}</td><td>${esc(x.type)}</td><td>${x.secId?'<b>'+esc(x.secId)+'</b> ':''}<span class="muted">${esc(x.desc)}</span></td><td class="n">${x.amount==null?'':money(x.amount)}</td></tr>`}).join('')}</tbody></table></div>${rows.length>15?'<p class="muted">Showing the latest 15.</p>':''}`})()}
+  <h3>Invoices</h3>${(()=>{const inv=D.invoices.filter(i=>i.client===c.id).sort((a,b)=>b.month.localeCompare(a.month));if(!inv.length)return'<p class="muted">No invoices yet. Finalize a billing run to create one.</p>';
+    return `<table><thead><tr><th>Invoice</th><th>Month</th><th class="n">Billable</th><th class="n">Fee</th><th></th></tr></thead><tbody>${inv.map(i=>`<tr><td><b>${esc(i.no)}</b></td><td>${fm(i.month)}</td><td class="n">${money(i.billable)}</td><td class="n">${money(i.fee)}</td><td class="n"><button class="btn g s" onclick="openInvoice('${i.id}')">Open</button> <button class="btn g s" onclick="dlInvoice('${i.id}')">Save</button></td></tr>`).join('')}</tbody></table>`})()}
   <h3>Danger zone</h3><div class="panel"><p class="muted">Deleting removes this client, all accounts, positions, exclusions and activity. Not possible while billing runs or invoices exist — void/delete those first, or just mark the client inactive.</p><button class="btn d" onclick="delClient('${c.id}')">Delete client</button></div>`;
 }
 async function upd(id,k,v){const c=D.clients.find(x=>x.id===id);await db('clients',sb.from('clients').update({[k]:v}).eq('id',id));c[k]=v;if(k==='name')render()}
@@ -240,8 +244,8 @@ async function commitClients(){const{clients,accounts}=parseClients();const nw=c
 // ---------- positions: upload + review ----------
 let pending=null;
 let pdate=lastMonth();
-const FIELDS=[['account','Account number'],['secId','Security ID'],['desc','Description (optional)'],['value','Market value']];
-function guess(h){h=h.toLowerCase();if(/acc(oun)?t/.test(h)&&!/name|type/.test(h))return'account';if(/cusip|symbol|ticker|security\s*id|sec\s*id|^id$/.test(h))return'secId';if(/desc|name|security$/.test(h))return'desc';if(/market|value|mv|amount|balance/.test(h))return'value';return''}
+const FIELDS=[['account','Account number'],['secId','Ticker / symbol'],['cusip','CUSIP (optional)'],['desc','Description (optional)'],['value','Market value']];
+function guess(h){h=h.toLowerCase();if(/acc(oun)?t/.test(h)&&!/name|type/.test(h))return'account';if(/cusip/.test(h))return'cusip';if(/symbol|ticker|security\s*id|sec\s*id|^id$/.test(h))return'secId';if(/security\s*desc|description|^security$|^name$/.test(h)&&!/account/.test(h))return'desc';if(/market\s*value|^value|mkt|current\s*value|balance/.test(h))return'value';return''}
 function positions(){
   const dates=[...new Set(D.positions.map(p=>p.date))].sort().reverse();
   const me=monthEnd(pdate);
@@ -263,7 +267,7 @@ function positions(){
     const accts=Object.keys(byAcct).map(id=>D.accounts.find(a=>a.id===id)).sort((a,b)=>(cName(a.client)+acctName(a)).localeCompare(cName(b.client)+acctName(b)));
     for(const a of accts){const rows=byAcct[a.id];const sub=rows.reduce((s,p)=>s+p.value,0);
       html+=`<tr><td colspan=3 style="background:#fbfaf7"><b>${esc(cName(a.client))}</b> · ${esc(acctName(a))} <span class="muted">${money(sub)}</span></td></tr>`;
-      html+=rows.map(p=>{const x=isExcluded(a.client,a.id,p.secId);return`<tr><td><b>${esc(p.secId)}</b><span class="muted" style="margin-left:6px">${esc(p.desc)}</span></td><td class="n">${money(p.value)}</td><td>${x?'<span class="pill x">excluded</span>':''}</td></tr>`}).join('')}
+      html+=rows.map(p=>{const x=isExcluded(a.client,a.id,p.secId,p.cusip);return`<tr><td><b>${esc(p.secId)}</b>${p.cusip&&p.cusip!==p.secId?' <span class="muted">'+esc(p.cusip)+'</span>':''}<span class="muted" style="margin-left:6px">${esc(p.desc)}</span></td><td class="n">${money(p.value)}</td><td>${x?'<span class="pill x">excluded</span>':''}</td></tr>`}).join('')}
     html+=`</tbody></table></div>`;
   } else if(dates.length){html+=`<p class="muted">Months on file: ${dates.map(d=>fd(d)).join(', ')}</p>`}
   return html;
@@ -274,28 +278,28 @@ function readSheet(inp){const f=inp.files[0];if(!f)return;const r=new FileReader
     rows=rows.filter(r=>r.some(c=>String(c).trim()!==''));if(rows.length<2)return alert('No data rows found.');
     let hi=rows.findIndex(r=>r.filter(c=>String(c).trim()!=='').length>=3);if(hi<0)hi=0;const headers=rows[hi].map((h,i)=>String(h).trim()||`Column ${i+1}`);
     const data=rows.slice(hi+1).map(r=>Object.fromEntries(headers.map((h,i)=>[h,r[i]])));
-    const map={account:'',secId:'',desc:'',value:''};
+    const map={account:'',secId:'',cusip:'',desc:'',value:''};
     if(D.mapping&&Object.values(D.mapping).every(v=>!v||headers.includes(v)))Object.assign(map,D.mapping);
     else headers.forEach(h=>{const g=guess(h);if(g&&!map[g])map[g]=h});
     pending={name:f.name,headers,rows:data,map};render()};
   r.readAsArrayBuffer(f);inp.value=''}
 function toNum(v){if(typeof v==='number')return v;const s=String(v).replace(/[$,\s]/g,'').replace(/^\((.*)\)$/,'-$1');if(s==='')return null;const n=Number(s);return isNaN(n)?null:n}
 function parsePending(){const m=pending.map;const out=[],unmatched=new Set(),bad=[];
-  for(const r of pending.rows){const num=normNum(r[m.account]);const sec=normSec(r[m.secId]);const val=toNum(r[m.value]);
+  for(const r of pending.rows){const num=normNum(r[m.account]);const sec=m.secId?normSec(r[m.secId]):'';const cusip=m.cusip?normSec(r[m.cusip]):'';const val=toNum(r[m.value]);
     if(!num&&!sec)continue;
     if(val===null){bad.push(`${num} ${sec}: value "${r[m.value]}"`);continue}
     const a=D.accounts.find(x=>normNum(x.number)===num);
     if(!a){unmatched.add(String(r[m.account]));continue}
-    out.push({account:a.id,date:monthEnd(pdate),secId:sec||'CASH',desc:m.desc?String(r[m.desc]??'').trim():'',value:val})}
+    out.push({account:a.id,date:monthEnd(pdate),secId:sec||cusip||'CASH',cusip,desc:m.desc?String(r[m.desc]??'').trim():'',value:val})}
   return{out,unmatched:[...unmatched],bad}}
-function preview(){const m=pending.map;if(!m.account||!m.secId||!m.value)return`<div class="note">Pick the account, security ID and market value columns.</div>`;
+function preview(){const m=pending.map;if(!m.account||!(m.secId||m.cusip)||!m.value)return`<div class="note">Pick the account, a security column (ticker or CUSIP) and market value.</div>`;
   const{out,unmatched,bad}=parsePending();const total=out.reduce((s,p)=>s+p.value,0);
   return `${unmatched.length?`<div class="err">${unmatched.length} account number${unmatched.length===1?'':'s'} not set up under any client — these rows will be skipped: ${unmatched.map(esc).join(', ')}. Add them under Clients, then upload again.</div>`:''}
   ${bad.length?`<div class="err">${bad.length} row${bad.length===1?'':'s'} with unreadable values skipped: ${bad.slice(0,5).map(esc).join('; ')}${bad.length>5?'…':''}</div>`:''}
   <div class="ok">${out.length} positions ready, total ${money(total)}, as of ${fd(monthEnd(pdate))}.</div>
   <button class="btn" onclick="commitPending()" ${out.length?'':'disabled'}>Save ${out.length} positions for ${fm(pdate)}</button>`}
 async function delMonth(me){if(!confirm('Delete every position dated '+fd(me)+'?'))return;await db('positions',sb.from('positions').delete().eq('as_of',me));D.positions=D.positions.filter(p=>p.date!==me);render()}
-async function commitPending(){const{out}=parsePending();const me=monthEnd(pdate);await db('positions',sb.from('positions').delete().eq('as_of',me));for(let i=0;i<out.length;i+=500)await db('positions',sb.from('positions').insert(out.slice(i,i+500).map(p=>({account_id:p.account,as_of:p.date,sec_id:p.secId,descr:p.desc,value:p.value}))));D.positions=D.positions.filter(p=>p.date!==me).concat(out);D.mapping={...pending.map};await setSetting('mapping',D.mapping);pending=null;render()}
+async function commitPending(){const{out}=parsePending();const me=monthEnd(pdate);await db('positions',sb.from('positions').delete().eq('as_of',me));for(let i=0;i<out.length;i+=500)await db('positions',sb.from('positions').insert(out.slice(i,i+500).map(p=>({account_id:p.account,as_of:p.date,sec_id:p.secId,cusip:p.cusip||'',descr:p.desc,value:p.value}))));D.positions=D.positions.filter(p=>p.date!==me).concat(out);D.mapping={...pending.map};await setSetting('mapping',D.mapping);pending=null;render()}
 
 // ---------- billing runs ----------
 function runs(){
@@ -323,7 +327,7 @@ async function createRuns(){
     const lines=[],exclList=[];
     for(const a of accts){const ps=pos.filter(p=>p.account===a.id);if(!ps.length)continue;
       const mv=ps.reduce((s,p)=>s+p.value,0);let ex=0;
-      ps.forEach(p=>{if(isExcluded(c.id,a.id,p.secId)){ex+=p.value;exclList.push({acct:acctName(a),secId:p.secId,desc:p.desc,value:p.value})}});
+      ps.forEach(p=>{if(isExcluded(c.id,a.id,p.secId,p.cusip)){ex+=p.value;exclList.push({acct:acctName(a),secId:p.secId+(p.cusip&&p.cusip!==p.secId?' / '+p.cusip:''),desc:p.desc,value:p.value})}});
       lines.push({label:acctName(a),mv,excl:ex,billable:mv-ex})}
     const gross=lines.reduce((s,l)=>s+l.mv,0),exclT=lines.reduce((s,l)=>s+l.excl,0),billable=Math.max(0,gross-exclT);
     const tb=marginal(tiers,billable),annual=tb.reduce((s,t)=>s+t.fee,0),fee=Math.round(annual*days/365*100)/100;
@@ -366,22 +370,22 @@ async function delRun(id){if(!confirm('Delete this draft?'))return;await db('bil
 
 // ---------- activity: upload + search ----------
 let apending=null,aF={from:'',to:'',type:'',sec:'',client:''};
-const AFIELDS=[['date','Date'],['account','Account number'],['type','Activity type'],['secId','Security ID (optional)'],['desc','Description (optional)'],['amount','Amount (optional)'],['qty','Quantity (optional)']];
-function aguess(h){h=h.toLowerCase();if(/date/.test(h))return'date';if(/acc(oun)?t/.test(h)&&!/name|type/.test(h))return'account';if(/type|activity|transaction|action/.test(h))return'type';if(/cusip|symbol|ticker|security\s*id|sec\s*id/.test(h))return'secId';if(/desc|memo|name/.test(h))return'desc';if(/amount|net|total|value|cash/.test(h))return'amount';if(/qty|quantity|shares|units/.test(h))return'qty';return''}
+const AFIELDS=[['date','Date'],['account','Account number'],['type','Activity type'],['secId','Ticker / symbol (optional)'],['cusip','CUSIP (optional)'],['desc','Description (optional)'],['amount','Amount (optional)'],['qty','Quantity (optional)']];
+function aguess(h){h=h.toLowerCase();if(/trade\s*date|^date|transaction\s*date|activity\s*date|posted/.test(h))return'date';if(/acc(oun)?t\s*(number|no|#|id)?$/.test(h)&&!/name|type/.test(h))return'account';if(/cusip/.test(h))return'cusip';if(/symbol|ticker|security\s*id|sec\s*id/.test(h))return'secId';if(/^(action|activity|transaction|trans)\b|(activity|transaction|action|trans)\s*(type|code)|^type$/.test(h)&&!/account/.test(h))return'type';if(/security\s*desc|description|memo|^security$/.test(h)&&!/account/.test(h))return'desc';if(/net\s*amount|gross\s*amount|^amount|total\s*amount|net\s*cash/.test(h))return'amount';if(/qty|quantity|shares|units/.test(h))return'qty';return''}
 function toDate(v){if(v instanceof Date)return isNaN(v)?null:v.toISOString().slice(0,10);if(typeof v==='number'){const d=XLSX.SSF.parse_date_code(v);if(d)return`${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`}const s=String(v).trim();let m;if((m=s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/)))return`${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;if((m=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})/))){const y=m[3].length===2?'20'+m[3]:m[3];return`${y}-${m[1].padStart(2,'0')}-${m[2].padStart(2,'0')}`}const d=new Date(s);return isNaN(d)?null:d.toISOString().slice(0,10)}
 function readActSheet(inp){const f=inp.files[0];if(!f)return;const r=new FileReader();
   r.onload=e=>{let rows;try{const wb=XLSX.read(e.target.result,{type:'array',cellDates:true});rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:''})}catch(err){return alert('Could not read file: '+err.message)}
     rows=rows.filter(r=>r.some(c=>String(c).trim()!==''));if(rows.length<2)return alert('No data rows found.');
     let hi=rows.findIndex(r=>r.filter(c=>String(c).trim()!=='').length>=3);if(hi<0)hi=0;const headers=rows[hi].map((h,i)=>String(h).trim()||`Column ${i+1}`);
     const data=rows.slice(hi+1).map(r=>Object.fromEntries(headers.map((h,i)=>[h,r[i]])));
-    const map={date:'',account:'',type:'',secId:'',desc:'',amount:'',qty:''};
+    const map={date:'',account:'',type:'',secId:'',cusip:'',desc:'',amount:'',qty:''};
     if(D.actMapping&&Object.values(D.actMapping).every(v=>!v||headers.includes(v)))Object.assign(map,D.actMapping);else headers.forEach(h=>{const g=aguess(h);if(g&&!map[g])map[g]=h});
     apending={name:f.name,headers,rows:data,map};render()};
   r.readAsArrayBuffer(f);inp.value=''}
 function parseAct(){const m=apending.map;const out=[],unmatched=new Set(),bad=[];
   for(const r of apending.rows){const num=normNum(r[m.account]);if(!num)continue;const a=D.accounts.find(x=>normNum(x.number)===num);if(!a){unmatched.add(String(r[m.account]));continue}
     const date=toDate(r[m.date]);if(!date){bad.push('bad date "'+r[m.date]+'"');continue}
-    out.push({account:a.id,date,type:String(r[m.type]??'').trim()||'Other',secId:m.secId?normSec(r[m.secId]):'',desc:m.desc?String(r[m.desc]??'').trim():'',amount:m.amount?toNum(r[m.amount]):null,qty:m.qty?toNum(r[m.qty]):null})}
+    out.push({account:a.id,date,type:String(r[m.type]??'').trim()||'Other',secId:m.secId?normSec(r[m.secId]):'',cusip:m.cusip?normSec(r[m.cusip]):'',desc:m.desc?String(r[m.desc]??'').trim():'',amount:m.amount?toNum(r[m.amount]):null,qty:m.qty?toNum(r[m.qty]):null})}
   return{out,unmatched:[...unmatched],bad}}
 function activity(){
   const types=[...new Set(D.activity.map(x=>x.type))].sort();
@@ -395,21 +399,21 @@ function activity(){
       html+=`${unmatched.length?`<div class="err">${unmatched.length} account number${unmatched.length===1?'':'s'} not set up — rows skipped: ${unmatched.slice(0,8).map(esc).join(', ')}${unmatched.length>8?'…':''}</div>`:''}${bad.length?`<div class="err">${bad.length} rows skipped: ${bad.slice(0,4).map(esc).join('; ')}</div>`:''}
       <div class="ok">${out.length} activity rows ready${ds.length?`, ${fd(ds[0])} to ${fd(ds[ds.length-1])}`:''}.</div><button class="btn" onclick="commitAct()" ${out.length?'':'disabled'}>Save batch</button> `}
     html+=`<button class="btn g" onclick="apending=null;render()">Cancel</button></div>`}
-  const f=aF;const rows=D.activity.filter(x=>(!f.from||x.date>=f.from)&&(!f.to||x.date<=f.to)&&(!f.type||x.type===f.type)&&(!f.sec||normSec(x.secId).includes(normSec(f.sec))||x.desc.toLowerCase().includes(f.sec.toLowerCase()))&&(!f.client||acctOf(x.account)?.client===f.client)).sort((a,b)=>b.date.localeCompare(a.date));
+  const f=aF;const rows=D.activity.filter(x=>(!f.from||x.date>=f.from)&&(!f.to||x.date<=f.to)&&(!f.type||x.type===f.type)&&(!f.sec||normSec(x.secId).includes(normSec(f.sec))||normSec(x.cusip||'').includes(normSec(f.sec))||x.desc.toLowerCase().includes(f.sec.toLowerCase()))&&(!f.client||acctOf(x.account)?.client===f.client)).sort((a,b)=>b.date.localeCompare(a.date));
   const amt=rows.reduce((s,x)=>s+(x.amount||0),0);
   html+=`<h3>Search</h3><div class="panel"><div class="row"><div class="f"><label>From</label><input type="date" value="${f.from}" onchange="aF.from=this.value;render()"></div><div class="f"><label>To</label><input type="date" value="${f.to}" onchange="aF.to=this.value;render()"></div></div>
   <div class="row"><div class="f"><label>Activity type</label><select onchange="aF.type=this.value;render()"><option value="">All types</option>${types.map(t=>`<option ${f.type===t?'selected':''}>${esc(t)}</option>`).join('')}</select></div>
   <div class="f"><label>Client</label><select onchange="aF.client=this.value;render()"><option value="">All clients</option>${D.clients.slice().sort((a,b)=>a.name.localeCompare(b.name)).map(c=>`<option value="${c.id}" ${f.client===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></div></div>
-  <div class="f"><label>Security ID or description</label><input id="asec" value="${esc(f.sec)}" placeholder="e.g. SPY, 037833100" oninput="aF.sec=this.value;render();const i=document.getElementById('asec');i.focus();i.setSelectionRange(999,999)"></div>
+  <div class="f"><label>Ticker, CUSIP or description</label><input id="asec" value="${esc(f.sec)}" placeholder="e.g. SPY, 037833100" oninput="aF.sec=this.value;render();const i=document.getElementById('asec');i.focus();i.setSelectionRange(999,999)"></div>
   <div class="muted">${rows.length} row${rows.length===1?'':'s'} · net amount ${money(amt)}${(f.from||f.to||f.type||f.sec||f.client)?` · <button class="link" onclick="aF={from:'',to:'',type:'',sec:'',client:''};render()">Clear filters</button>`:''}</div></div>
-  ${rows.length?`<div class="wrap"><table><thead><tr><th>Date</th><th>Client · account</th><th>Type</th><th>Security</th><th class="n">Qty</th><th class="n">Amount</th></tr></thead><tbody>${rows.slice(0,500).map(x=>{const a=acctOf(x.account);return`<tr><td>${fd(x.date)}</td><td>${a?esc(cName(a.client))+' <span class="muted">'+esc(acctName(a))+'</span>':''}</td><td>${esc(x.type)}</td><td>${x.secId?'<b>'+esc(x.secId)+'</b> ':''}<span class="muted">${esc(x.desc)}</span></td><td class="n">${x.qty==null?'':x.qty}</td><td class="n">${x.amount==null?'':money(x.amount)}</td></tr>`}).join('')}</tbody></table>${rows.length>500?`<p class="muted">Showing first 500 of ${rows.length}. Narrow the filters to see the rest.</p>`:''}</div>`:D.activity.length?`<div class="empty">No activity matches.</div>`:''}`;
+  ${rows.length?`<div class="wrap"><table><thead><tr><th>Date</th><th>Client · account</th><th>Type</th><th>Security</th><th class="n">Qty</th><th class="n">Amount</th></tr></thead><tbody>${rows.slice(0,500).map(x=>{const a=acctOf(x.account);return`<tr><td>${fd(x.date)}</td><td>${a?esc(cName(a.client))+' <span class="muted">'+esc(acctName(a))+'</span>':''}</td><td>${esc(x.type)}</td><td>${x.secId?'<b>'+esc(x.secId)+'</b> ':''}<span class="muted">${x.cusip&&x.cusip!==x.secId?esc(x.cusip)+' · ':''}${esc(x.desc)}</span></td><td class="n">${x.qty==null?'':x.qty}</td><td class="n">${x.amount==null?'':money(x.amount)}</td></tr>`}).join('')}</tbody></table>${rows.length>500?`<p class="muted">Showing first 500 of ${rows.length}. Narrow the filters to see the rest.</p>`:''}</div>`:D.activity.length?`<div class="empty">No activity matches.</div>`:''}`;
   return html;
 }
 async function commitAct(){const{out}=parseAct();const b={id:uid(),name:apending.name,count:out.length,at:new Date().toISOString()};
   await db('activity_batches',sb.from('activity_batches').insert({id:b.id,name:b.name,row_count:b.count}));
-  const rows=out.map(x=>({id:uid(),batch_id:b.id,account_id:x.account,trade_date:x.date,act_type:x.type,sec_id:x.secId,descr:x.desc,amount:x.amount,quantity:x.qty}));
+  const rows=out.map(x=>({id:uid(),batch_id:b.id,account_id:x.account,trade_date:x.date,act_type:x.type,sec_id:x.secId,cusip:x.cusip,descr:x.desc,amount:x.amount,quantity:x.qty}));
   for(let i=0;i<rows.length;i+=500)await db('activity',sb.from('activity').insert(rows.slice(i,i+500)));
-  D.batches.push(b);D.activity.push(...rows.map(r=>({id:r.id,batch:b.id,account:r.account_id,date:r.trade_date,type:r.act_type,secId:r.sec_id,desc:r.descr,amount:r.amount,qty:r.quantity})));
+  D.batches.push(b);D.activity.push(...rows.map(r=>({id:r.id,batch:b.id,account:r.account_id,date:r.trade_date,type:r.act_type,secId:r.sec_id,cusip:r.cusip,desc:r.descr,amount:r.amount,qty:r.quantity})));
   D.actMapping={...apending.map};await setSetting('actMapping',D.actMapping);apending=null;render()}
 async function delBatch(id){const b=D.batches.find(x=>x.id===id);if(!confirm('Delete batch "'+b.name+'" and its '+b.count+' rows?'))return;await db('activity_batches',sb.from('activity_batches').delete().eq('id',id));D.batches=D.batches.filter(x=>x.id!==id);D.activity=D.activity.filter(x=>x.batch!==id);render()}
 
@@ -417,24 +421,24 @@ async function delBatch(id){const b=D.batches.find(x=>x.id===id);if(!confirm('De
 let sQ='',sMonth=null,cMonth=null;
 const months=()=>[...new Set(D.positions.map(p=>p.date))].sort().reverse();
 const acctOf=id=>D.accounts.find(a=>a.id===id);
-const isCash=sec=>D.cashSyms.map(normSec).includes(normSec(sec));
-const isMM=sec=>D.mmSyms.map(normSec).includes(normSec(sec));
+const isCash=(sec,cu)=>{const L=D.cashSyms.map(normSec);return L.includes(normSec(sec))||(cu&&L.includes(normSec(cu)))};
+const isMM=(sec,cu)=>{const L=D.mmSyms.map(normSec);return L.includes(normSec(sec))||(cu&&L.includes(normSec(cu)))};
 function monthPicker(cur,setter){const ms=months();if(!ms.length)return'';return`<div class="f"><label>As of</label><select onchange="${setter}=this.value;render()">${ms.map(d=>`<option value="${d}" ${d===cur?'selected':''}>${fd(d)}</option>`).join('')}</select></div>`}
 function search(){
   const ms=months();if(!ms.length)return`<h2>Search</h2><div class="empty">Upload positions first.</div>`;
   const date=sMonth&&ms.includes(sMonth)?sMonth:ms[0];
   const q=sQ.trim().toLowerCase();
   const rows=D.positions.filter(p=>p.date===date).map(p=>{const a=acctOf(p.account);return{...p,a,client:a?cName(a.client):'?'}})
-    .filter(r=>!q||[r.secId,r.desc,r.client,r.a?acctName(r.a):''].join(' ').toLowerCase().includes(q))
+    .filter(r=>!q||[r.secId,r.cusip,r.desc,r.client,r.a?acctName(r.a):''].join(' ').toLowerCase().includes(q))
     .sort((x,y)=>x.client.localeCompare(y.client)||y.value-x.value);
   const byClient={};rows.forEach(r=>(byClient[r.client]??=[]).push(r));
   const total=rows.reduce((s,r)=>s+r.value,0);
-  const secs=[...new Set(rows.map(r=>normSec(r.secId)))];
+  const secs=[...new Set(rows.map(r=>normSec(r.secId)+(r.cusip&&r.cusip!==r.secId?' / '+r.cusip:'')))];
   return `<h2>Search positions</h2><p class="muted">Find who holds a security, or everything matching a word, across all clients.</p>
-  <div class="panel"><div class="row"><div class="f"><label>Security ID, description, client or account</label><input id="sq" value="${esc(sQ)}" placeholder="e.g. SPY, 037833100, Apple" oninput="sQ=this.value;render();const i=document.getElementById('sq');i.focus();i.setSelectionRange(999,999)"></div>${monthPicker(date,'sMonth')}</div>
+  <div class="panel"><div class="row"><div class="f"><label>Ticker, CUSIP, description, client or account</label><input id="sq" value="${esc(sQ)}" placeholder="e.g. SPY, 037833100, Apple" oninput="sQ=this.value;render();const i=document.getElementById('sq');i.focus();i.setSelectionRange(999,999)"></div>${monthPicker(date,'sMonth')}</div>
   ${q?`<div class="muted">${rows.length} position${rows.length===1?'':'s'} in ${Object.keys(byClient).length} client${Object.keys(byClient).length===1?'':'s'}${secs.length===1?` · everyone holding ${esc(secs[0])}`:''} · total ${money(total)}</div>`:''}</div>
   ${rows.length?`<div class="wrap"><table><thead><tr><th>Account</th><th>Security</th><th class="n">Value</th></tr></thead><tbody>
-  ${Object.keys(byClient).map(cn=>{const rs=byClient[cn];const sub=rs.reduce((s,r)=>s+r.value,0);return`<tr><td colspan=3 style="background:#fbfaf7"><b>${esc(cn)}</b> <span class="muted">${rs.length} · ${money(sub)}</span></td></tr>`+rs.map(r=>`<tr><td>${r.a?esc(acctName(r.a)):''}</td><td><b>${esc(r.secId)}</b> <span class="muted">${esc(r.desc)}</span>${isMM(r.secId)?' <span class="pill">money market</span>':isCash(r.secId)?' <span class="pill">cash</span>':''}</td><td class="n">${money(r.value)}</td></tr>`).join('')}).join('')}
+  ${Object.keys(byClient).map(cn=>{const rs=byClient[cn];const sub=rs.reduce((s,r)=>s+r.value,0);return`<tr><td colspan=3 style="background:#fbfaf7"><b>${esc(cn)}</b> <span class="muted">${rs.length} · ${money(sub)}</span></td></tr>`+rs.map(r=>`<tr><td>${r.a?esc(acctName(r.a)):''}</td><td><b>${esc(r.secId)}</b> <span class="muted">${r.cusip&&r.cusip!==r.secId?esc(r.cusip)+' · ':''}${esc(r.desc)}</span>${isMM(r.secId,r.cusip)?' <span class="pill">money market</span>':isCash(r.secId,r.cusip)?' <span class="pill">cash</span>':''}</td><td class="n">${money(r.value)}</td></tr>`).join('')}).join('')}
   </tbody><tfoot><tr><td colspan=2>Total</td><td class="n">${money(total)}</td></tr></tfoot></table></div>`:`<div class="empty">Nothing matches "${esc(sQ)}" on ${fd(date)}.</div>`}`;
 }
 
@@ -446,7 +450,7 @@ function cash(){
   const held=[...new Set(pos.map(p=>normSec(p.secId)))].sort();const descOf=k=>pos.find(p=>normSec(p.secId)===k&&p.desc)?.desc||'';
   const per={};
   pos.forEach(p=>{const a=acctOf(p.account);if(!a)return;const cn=cName(a.client);const o=(per[cn]??={cash:0,mm:0,accts:{}});const ao=(o.accts[acctName(a)]??={cash:0,mm:0});
-    if(isMM(p.secId)){o.mm+=p.value;ao.mm+=p.value}else if(isCash(p.secId)){o.cash+=p.value;ao.cash+=p.value}});
+    if(isMM(p.secId,p.cusip)){o.mm+=p.value;ao.mm+=p.value}else if(isCash(p.secId,p.cusip)){o.cash+=p.value;ao.cash+=p.value}});
   const names=Object.keys(per).sort();const T={cash:0,mm:0};names.forEach(n=>{T.cash+=per[n].cash;T.mm+=per[n].mm});
   const chk=(list,sym)=>`<label style="display:flex;gap:6px;align-items:center;font-size:14px;color:var(--text)"><input type="checkbox" style="width:auto" ${D[list].map(normSec).includes(sym)?'checked':''} onchange="toggleSym('${list}','${esc(sym)}',this.checked)"><span><b>${esc(sym)}</b> <span class="muted">${esc(descOf(sym))}</span></span></label>`;
   return `<h2>Cash balances</h2><p class="muted">Cash plus money-market funds, per client, as of the selected month-end.</p>
