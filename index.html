@@ -61,7 +61,7 @@ window.onunhandledrejection=e=>{const b=document.getElementById('errbar');b.styl
 // ---------- Supabase connection ----------
 const CFG_KEY='geneva-billing-cfg';
 let sb=null,D=fresh();
-function fresh(){return{clients:[],accounts:[],tiers:[],excl:[],positions:[],runs:[],invoices:[],activity:[],batches:[],mapping:null,cashSyms:['CASH'],mmSyms:[],nextInv:1,firm:{name:'Geneva Financial Group',addr:'',phone:'',email:'',terms:'Fee is debited from the account or payable within 30 days.'}}}
+function fresh(){return{clients:[],accounts:[],tiers:[],excl:[],positions:[],runs:[],invoices:[],activity:[],batches:[],mapping:null,cashSyms:['CASH'],mmSyms:[],defaultRate:0.01,nextInv:1,firm:{name:'Geneva Financial Group',addr:'',phone:'',email:'',terms:'Fee is debited from the account or payable within 30 days.'}}}
 const DEFAULT_CFG={url:'https://dfspitfvrwzxwmsdmwwr.supabase.co',key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRmc3BpdGZ2cnd6eHdtc2Rtd3dyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg1MjQ5NTYsImV4cCI6MjEwNDEwMDk1Nn0.gOovT-TPYm8dVn_KjY-JpqHBzvrz2lLoSgF9CuW_oOc'};
 function cfg(){try{return JSON.parse(localStorage.getItem(CFG_KEY))||DEFAULT_CFG}catch{return DEFAULT_CFG}}
 function gate(html){document.getElementById('gate').innerHTML=html?`<div class="gate"><div class="card">${html}</div></div>`:'';document.getElementById('hdr').style.display=html?'none':'';document.getElementById('nav').style.display=html?'none':''}
@@ -120,7 +120,8 @@ function go(p,id=null){view={p,id};render()}
 const NAV=[['clients','Clients'],['positions','Positions'],['activity','Activity'],['search','Search'],['cash','Cash'],['runs','Billing runs'],['invoices','Invoices']];
 
 // ---------- fee math ----------
-function tiersFor(c){return D.tiers.filter(t=>t.client===c).sort((a,b)=>a.min-b.min)}
+function tiersFor(c){const t=D.tiers.filter(t=>t.client===c).sort((a,b)=>a.min-b.min);return t.length?t:[{id:'default',client:c,min:0,max:null,rate:D.defaultRate??0.01,isDefault:true}]}
+function ownTiers(c){return D.tiers.filter(t=>t.client===c).sort((a,b)=>a.min-b.min)}
 function marginal(tiers,aum){return tiers.map(t=>{const top=t.max==null?aum:Math.min(t.max,aum);const slice=Math.max(0,top-t.min);return{...t,slice,fee:Math.round(slice*t.rate*100)/100}})}
 function isExcluded(clientId,accountId,secId,cusip){return D.excl.some(e=>e.client===clientId&&(normSec(e.secId)===normSec(secId)||(cusip&&normSec(e.secId)===normSec(cusip)))&&(!e.account||e.account===accountId))}
 
@@ -138,15 +139,16 @@ function clients(){
   <div class="panel"><div class="f"><label>New client</label><input id="nc" placeholder="Household or entity name" onkeydown="if(event.key==='Enter')addClient()"></div><button class="btn" onclick="addClient()">Add client</button>
   <span style="margin-left:14px" class="muted">or</span> <label class="btn g" style="display:inline-block;margin-left:6px">Import from spreadsheet<input type="file" accept=".xlsx,.xls,.csv" hidden onchange="readClientSheet(this)"></label></div>
   ${cpending?clientImportPanel():''}
-  ${rows.length?`<table><thead><tr><th>Client</th><th class="n">Accounts</th><th class="n">Tiers</th><th class="n">Excluded IDs</th></tr></thead><tbody>
-  ${rows.map(c=>`<tr class="click" onclick="go('clients','${c.id}')"><td>${esc(c.name)}${c.active?'':' <span class=pill>inactive</span>'}</td><td class="n">${D.accounts.filter(a=>a.client===c.id).length}</td><td class="n">${tiersFor(c.id).length}</td><td class="n">${D.excl.filter(e=>e.client===c.id).length}</td></tr>`).join('')}
+  <div class="panel"><div class="row"><div class="f"><label>Firm default annual rate (%) — used for any client without their own fee tiers</label><input class="n" type="number" step="0.001" value="${((D.defaultRate??0.01)*100).toFixed(3)}" onchange="D.defaultRate=Number(this.value)/100;setSetting('defaultRate',D.defaultRate).then(render)"></div></div></div>
+  ${rows.length?`<table><thead><tr><th>Client</th><th class="n">Accounts</th><th class="n">Rate</th><th class="n">Excluded IDs</th></tr></thead><tbody>
+  ${rows.map(c=>`<tr class="click" onclick="go('clients','${c.id}')"><td>${esc(c.name)}${c.active?'':' <span class=pill>inactive</span>'}</td><td class="n">${D.accounts.filter(a=>a.client===c.id).length}</td><td class="n">${(()=>{const t=ownTiers(c.id);return t.length?(t.length===1?pct(t[0].rate,2):t.length+' tiers'):'<span class="muted">default '+pct(D.defaultRate??0.01,2)+'</span>'})()}</td><td class="n">${D.excl.filter(e=>e.client===c.id).length}</td></tr>`).join('')}
   </tbody></table>`:`<div class="empty">No clients yet. Add the first one above.</div>`}`;
 }
 async function addClient(){const el=document.getElementById('nc');const n=el.value.trim();if(!n){el.focus();el.style.borderColor='var(--red)';el.placeholder='Type the client name first';return}const c={id:uid(),name:n,active:true,notes:''};await db('clients',sb.from('clients').insert({id:c.id,name:c.name}));D.clients.push(c);go('clients',c.id)}
 
 function clientDetail(){
   const c=D.clients.find(x=>x.id===view.id);if(!c)return clients();
-  const accts=D.accounts.filter(a=>a.client===c.id),tiers=tiersFor(c.id);
+  const accts=D.accounts.filter(a=>a.client===c.id),tiers=ownTiers(c.id);
   const excl=D.excl.filter(e=>e.client===c.id);
   const warn=[];if(tiers.length&&tiers[0].min!==0)warn.push('First tier should start at $0.');
   for(let i=0;i<tiers.length-1;i++){if(tiers[i].max==null)warn.push('An open-ended tier is not last.');else if(tiers[i].max!==tiers[i+1].min)warn.push(`Gap or overlap at ${money(tiers[i].max)} / ${money(tiers[i+1].min)}.`)}
@@ -165,6 +167,7 @@ function clientDetail(){
   <div class="f"><label>Nickname</label><input id="ak" placeholder="e.g. Joint taxable"></div><button class="btn" onclick="addAcct('${c.id}')">Add account</button></div>
 
   <h3>Fee schedule <span class="pill">marginal, annual rate ÷ 365 × days in month</span></h3>
+  ${tiers.length?'':`<div class="note">No override set — this client is billed at the firm default of <b>${pct(D.defaultRate??0.01,2)}</b> on all billable value. Add a tier below to override.</div>`}
   ${warn.map(w=>`<div class="note">${w}</div>`).join('')}
   ${tiers.length?`<table><thead><tr><th class="n">From</th><th class="n">Up to</th><th class="n">Annual rate</th><th></th></tr></thead><tbody>${tiers.map(t=>`<tr><td class="n">${money(t.min)}</td><td class="n">${t.max==null?'and above':money(t.max)}</td><td class="n">${pct(t.rate)}</td><td class="n"><button class="btn d s" onclick="delTier('${t.id}')">Remove</button></td></tr>`).join('')}</tbody></table>
   <p class="muted">On ${money(sample)} billable: ${money(sf)}/yr, effective ${pct(sf/sample)}, a 31-day month ≈ ${money(sf*31/365)}.</p>`:''}
@@ -320,7 +323,7 @@ async function createRuns(){
   const targets=cid==='ALL'?D.clients.filter(c=>c.active):D.clients.filter(c=>c.id===cid);const ok=[],bad=[];
   for(const c of targets){
     if(D.runs.some(r=>r.client===c.id&&r.month===month&&r.status!=='void')){bad.push(`${c.name}: a run for ${fm(month)} already exists`);continue}
-    const tiers=tiersFor(c.id);if(!tiers.length){bad.push(`${c.name}: no fee tiers`);continue}
+    const tiers=tiersFor(c.id);
     const accts=D.accounts.filter(a=>a.client===c.id&&a.active);
     const pos=D.positions.filter(p=>p.date===me&&accts.some(a=>a.id===p.account));
     if(!pos.length){bad.push(`${c.name}: no positions on ${fd(me)}`);continue}
@@ -391,12 +394,13 @@ function activity(){
   const types=[...new Set(D.activity.map(x=>x.type))].sort();
   let html=`<h2>Activity</h2><p class="muted">Upload transaction exports for any period. Each upload is kept as a batch you can delete.</p>
   <div class="panel"><label class="btn g" style="display:inline-block">Upload activity spreadsheet<input type="file" accept=".xlsx,.xls,.csv" hidden onchange="readActSheet(this)"></label>
-  ${D.batches.length?`<table style="margin-top:12px"><thead><tr><th>Batch</th><th>Uploaded</th><th class="n">Rows</th><th></th></tr></thead><tbody>${D.batches.slice().sort((a,b)=>b.at.localeCompare(a.at)).map(b=>`<tr><td>${esc(b.name)}</td><td>${new Date(b.at).toLocaleDateString()}</td><td class="n">${b.count}</td><td class="n"><button class="btn d s" onclick="delBatch('${b.id}')">Delete</button></td></tr>`).join('')}</tbody></table>`:''}</div>`;
+  ${D.batches.length?`<table style="margin-top:12px"><thead><tr><th>Batch</th><th>Uploaded</th><th>Period</th><th class="n">Rows</th><th class="n">Net amount</th><th></th></tr></thead><tbody>${D.batches.slice().sort((a,b)=>b.at.localeCompare(a.at)).map(b=>{const rs=D.activity.filter(x=>x.batch===b.id);const ds=rs.map(x=>x.date).sort();const amt=rs.reduce((s,x)=>s+(x.amount||0),0);return`<tr><td>${esc(b.name)}</td><td>${new Date(b.at).toLocaleDateString()}</td><td>${ds.length?fd(ds[0])+' – '+fd(ds[ds.length-1]):''}</td><td class="n">${b.count}</td><td class="n">${money(amt)}</td><td class="n"><button class="btn g s" onclick="aF={from:'${'${ds[0]||\'\'}'}',to:'${'${ds[ds.length-1]||\'\'}'}',type:'',sec:'',client:''};render()">View</button> <button class="btn d s" onclick="delBatch('${b.id}')">Delete</button></td></tr>`}).join('')}</tbody></table>`:''}</div>`;
   if(apending){const m=apending.map;
     html+=`<div class="panel"><b>${esc(apending.name)}</b> — ${apending.rows.length} rows. Match the columns:<div class="row" style="margin-top:10px">${AFIELDS.map(([k,l])=>`<div class="f"><label>${l}</label><select onchange="apending.map.${k}=this.value;render()"><option value="">—</option>${apending.headers.map(h=>`<option ${m[k]===h?'selected':''}>${esc(h)}</option>`).join('')}</select></div>`).join('')}</div>`;
     if(!m.date||!m.account||!m.type)html+=`<div class="note">Pick the date, account and activity type columns.</div>`;
     else{const{out,unmatched,bad}=parseAct();const ds=out.map(x=>x.date).sort();
       html+=`${unmatched.length?`<div class="err">${unmatched.length} account number${unmatched.length===1?'':'s'} not set up — rows skipped: ${unmatched.slice(0,8).map(esc).join(', ')}${unmatched.length>8?'…':''}</div>`:''}${bad.length?`<div class="err">${bad.length} rows skipped: ${bad.slice(0,4).map(esc).join('; ')}</div>`:''}
+      ${(()=>{const byT={};out.forEach(x=>{const o=(byT[x.type]??={n:0,amt:0});o.n++;o.amt+=x.amount||0});const keys=Object.keys(byT).sort();const tot=out.reduce((s,x)=>s+(x.amount||0),0);return`<table style="margin:10px 0"><thead><tr><th>Activity type</th><th class="n">Rows</th><th class="n">Net amount</th></tr></thead><tbody>${keys.map(k=>`<tr><td>${esc(k)}</td><td class="n">${byT[k].n}</td><td class="n">${money(byT[k].amt)}</td></tr>`).join('')}</tbody><tfoot><tr><td>Total</td><td class="n">${out.length}</td><td class="n">${money(tot)}</td></tr></tfoot></table>`})()}
       <div class="ok">${out.length} activity rows ready${ds.length?`, ${fd(ds[0])} to ${fd(ds[ds.length-1])}`:''}.</div><button class="btn" onclick="commitAct()" ${out.length?'':'disabled'}>Save batch</button> `}
     html+=`<button class="btn g" onclick="apending=null;render()">Cancel</button></div>`}
   const f=aF;const rows=D.activity.filter(x=>(!f.from||x.date>=f.from)&&(!f.to||x.date<=f.to)&&(!f.type||x.type===f.type)&&(!f.sec||normSec(x.secId).includes(normSec(f.sec))||normSec(x.cusip||'').includes(normSec(f.sec))||x.desc.toLowerCase().includes(f.sec.toLowerCase()))&&(!f.client||acctOf(x.account)?.client===f.client)).sort((a,b)=>b.date.localeCompare(a.date));
@@ -405,6 +409,7 @@ function activity(){
   <div class="row"><div class="f"><label>Activity type</label><select onchange="aF.type=this.value;render()"><option value="">All types</option>${types.map(t=>`<option ${f.type===t?'selected':''}>${esc(t)}</option>`).join('')}</select></div>
   <div class="f"><label>Client</label><select onchange="aF.client=this.value;render()"><option value="">All clients</option>${D.clients.slice().sort((a,b)=>a.name.localeCompare(b.name)).map(c=>`<option value="${c.id}" ${f.client===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></div></div>
   <div class="f"><label>Ticker, CUSIP or description</label><input id="asec" value="${esc(f.sec)}" placeholder="e.g. SPY, 037833100" oninput="aF.sec=this.value;render();const i=document.getElementById('asec');i.focus();i.setSelectionRange(999,999)"></div>
+  ${rows.length&&!f.type?(()=>{const byT={};rows.forEach(x=>{const o=(byT[x.type]??={n:0,amt:0});o.n++;o.amt+=x.amount||0});return`<div class="wrap"><table style="margin-bottom:10px"><thead><tr><th>Activity type</th><th class="n">Rows</th><th class="n">Net amount</th></tr></thead><tbody>${Object.keys(byT).sort().map(k=>`<tr class="click" onclick="aF.type='${esc(k).replace(/'/g,"\\'")}';render()"><td>${esc(k)}</td><td class="n">${byT[k].n}</td><td class="n">${money(byT[k].amt)}</td></tr>`).join('')}</tbody></table></div>`})():''}
   <div class="muted">${rows.length} row${rows.length===1?'':'s'} · net amount ${money(amt)}${(f.from||f.to||f.type||f.sec||f.client)?` · <button class="link" onclick="aF={from:'',to:'',type:'',sec:'',client:''};render()">Clear filters</button>`:''}</div></div>
   ${rows.length?`<div class="wrap"><table><thead><tr><th>Date</th><th>Client · account</th><th>Type</th><th>Security</th><th class="n">Qty</th><th class="n">Amount</th></tr></thead><tbody>${rows.slice(0,500).map(x=>{const a=acctOf(x.account);return`<tr><td>${fd(x.date)}</td><td>${a?esc(cName(a.client))+' <span class="muted">'+esc(acctName(a))+'</span>':''}</td><td>${esc(x.type)}</td><td>${x.secId?'<b>'+esc(x.secId)+'</b> ':''}<span class="muted">${x.cusip&&x.cusip!==x.secId?esc(x.cusip)+' · ':''}${esc(x.desc)}</span></td><td class="n">${x.qty==null?'':x.qty}</td><td class="n">${x.amount==null?'':money(x.amount)}</td></tr>`}).join('')}</tbody></table>${rows.length>500?`<p class="muted">Showing first 500 of ${rows.length}. Narrow the filters to see the rest.</p>`:''}</div>`:D.activity.length?`<div class="empty">No activity matches.</div>`:''}`;
   return html;
