@@ -1,5 +1,3 @@
--- Geneva Billing — migration v4: keep both ticker and CUSIP on positions and activity
-alter table positions add column if not exists cusip text not null default '';
-alter table activity  add column if not exists cusip text not null default '';
-create index if not exists positions_cusip on positions(cusip);
-create index if not exists activity_cusip  on activity(cusip);
+-- Geneva Billing — migration v5: fee debit account per account
+alter table accounts add column if not exists debit_account_id uuid references accounts(id) on delete set null;
+alter table billing_runs add column if not exists debits jsonb not null default '[]'::jsonb;
