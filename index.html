@@ -162,7 +162,7 @@ function go(p,id=null){view={p,id};render()}
 const NAV=[['clients','Clients'],['positions','Positions'],['activity','Activity'],['search','Search'],['cash','Cash'],['runs','Billing runs'],['invoices','Invoices']];
 
 // ---------- fee math ----------
-function tiersFor(c){const t=D.tiers.filter(t=>t.client===c).sort((a,b)=>a.min-b.min);return t.length?t:[{id:'default',client:c,min:0,max:null,rate:D.defaultRate??0.01,isDefault:true}]}
+function tiersFor(c){const t=D.tiers.filter(t=>t.client===c).sort((a,b)=>a.min-b.min);const real=t.some(x=>x.rate>0);return real?t:[{id:'default',client:c,min:0,max:null,rate:D.defaultRate??0.01,isDefault:true}]}
 function ownTiers(c){return D.tiers.filter(t=>t.client===c).sort((a,b)=>a.min-b.min)}
 function marginal(tiers,aum){return tiers.map(t=>{const top=t.max==null?aum:Math.min(t.max,aum);const slice=Math.max(0,top-t.min);return{...t,slice,fee:Math.round(slice*t.rate*100)/100}})}
 function isExcluded(clientId,accountId,secId,cusip){return D.excl.some(e=>e.client===clientId&&(normSec(e.secId)===normSec(secId)||(cusip&&normSec(e.secId)===normSec(cusip)))&&(!e.account||e.account===accountId))}
@@ -181,6 +181,7 @@ function clients(){
   <div class="panel"><div class="f"><label>New client</label><input id="nc" placeholder="Household or entity name" onkeydown="if(event.key==='Enter')addClient()"></div><button class="btn" onclick="addClient()">Add client</button>
   <span style="margin-left:14px" class="muted">or</span> <label class="btn g" style="display:inline-block;margin-left:6px">Import from spreadsheet<input type="file" accept=".xlsx,.xls,.csv" hidden onchange="readClientSheet(this)"></label></div>
   ${cpending?clientImportPanel():''}
+  ${(()=>{const bad=D.tiers.filter(t=>!(t.rate>0));if(!bad.length)return'';const names=[...new Set(bad.map(t=>cName(t.client)))];return`<div class="err">${bad.length} fee tier${bad.length===1?'':'s'} at 0% (${names.slice(0,5).map(esc).join(', ')}${names.length>5?'…':''}). These are ignored and the default rate applies. <button class="link" onclick="purgeZeroTiers()">Remove them</button></div>`})()}
   <div class="panel"><div class="row"><div class="f"><label>Firm default annual rate (%) — used for any client without their own fee tiers</label><input class="n" type="number" step="0.001" value="${((D.defaultRate??0.01)*100).toFixed(3)}" onchange="D.defaultRate=Number(this.value)/100;setSetting('defaultRate',D.defaultRate).then(render)"></div></div></div>
   ${rows.length?`<table><thead><tr><th>Client</th><th class="n">Accounts</th><th class="n">Rate</th><th class="n">Excluded IDs</th></tr></thead><tbody>
   ${rows.map(c=>`<tr class="click" onclick="go('clients','${c.id}')"><td>${esc(c.name)}${c.active?'':' <span class=pill>inactive</span>'}</td><td class="n">${D.accounts.filter(a=>a.client===c.id).length}</td><td class="n">${(()=>{const t=ownTiers(c.id);return t.length?(t.length===1?pct(t[0].rate,2):t.length+' tiers'):'<span class="muted">default '+pct(D.defaultRate??0.01,2)+'</span>'})()}</td><td class="n">${D.excl.filter(e=>e.client===c.id).length}</td></tr>`).join('')}
@@ -229,6 +230,9 @@ function clientDetail(){
     return `<p class="muted">${rows.length} rows on file. <button class="link" onclick="aF={from:'',to:'',type:'',sec:'',client:'${c.id}'};go('activity')">Search all of this client's activity</button></p><div class="wrap"><table><thead><tr><th>Date</th><th>Account</th><th>Type</th><th>Security</th><th class="n">Amount</th></tr></thead><tbody>${rows.slice(0,15).map(x=>{const a=accts.find(y=>y.id===x.account);return`<tr><td>${fd(x.date)}</td><td>${esc(acctName(a))}</td><td>${esc(x.type)}</td><td>${x.secId?'<b>'+esc(x.secId)+'</b> ':''}<span class="muted">${esc(x.desc)}</span></td><td class="n">${x.amount==null?'':money(x.amount)}</td></tr>`}).join('')}</tbody></table></div>${rows.length>15?'<p class="muted">Showing the latest 15.</p>':''}`})()}
   <h3>Invoices</h3>${(()=>{const inv=D.invoices.filter(i=>i.client===c.id).sort((a,b)=>b.month.localeCompare(a.month));if(!inv.length)return'<p class="muted">No invoices yet. Finalize a billing run to create one.</p>';
     return `<table><thead><tr><th>Invoice</th><th>Month</th><th class="n">Billable</th><th class="n">Fee</th><th></th></tr></thead><tbody>${inv.map(i=>`<tr><td><b>${esc(i.no)}</b></td><td>${fm(i.month)}</td><td class="n">${money(i.billable)}</td><td class="n">${money(i.fee)}</td><td class="n"><button class="btn g s" onclick="openInvoice('${i.id}')">Open</button> <button class="btn g s" onclick="dlInvoice('${i.id}')">Save</button></td></tr>`).join('')}</tbody></table>`})()}
+  <h3>Merge into another client</h3><div class="panel"><p class="muted">Moves this client's accounts, exclusions and activity into the client you pick, keeps that client's fee tiers, and deletes this record. Use it for duplicates such as "ARON STERN" and "ARON STERN &amp;".</p>
+  ${(()=>{const items=D.clients.filter(x=>x.id!==c.id).sort((a,b)=>a.name.localeCompare(b.name)).map(x=>({id:x.id,label:x.name}));regPicker('mrg',items,v=>{mergeTarget=v});return picker('mrg',items,mergeTarget,null,'Type the client to keep…')})()}
+  <div class="acts"><button class="btn" onclick="mergeClient('${c.id}')">Merge</button></div></div>
   <h3>Danger zone</h3><div class="panel"><p class="muted">Deleting removes this client, all accounts, positions, exclusions and activity. Not possible while billing runs or invoices exist — void/delete those first, or just mark the client inactive.</p><button class="btn d" onclick="delClient('${c.id}')">Delete client</button></div>`;
 }
 async function upd(id,k,v){const c=D.clients.find(x=>x.id===id);await db('clients',sb.from('clients').update({[k]:v}).eq('id',id));c[k]=v;if(k==='name')render()}
@@ -236,13 +240,23 @@ async function addAcct(c){const number=document.getElementById('an').value.trim(
 async function delAcct(id){const a=D.accounts.find(x=>x.id===id);const n=D.positions.filter(p=>p.account===id).length,m=D.activity.filter(p=>p.account===id).length;
   if(!confirm(`Delete account ${acctName(a)}?\nThis also removes ${n} position rows and ${m} activity rows.`))return;
   await db('accounts',sb.from('accounts').delete().eq('id',id));D.accounts=D.accounts.filter(x=>x.id!==id);D.positions=D.positions.filter(p=>p.account!==id);D.activity=D.activity.filter(p=>p.account!==id);D.excl=D.excl.filter(e=>e.account!==id);render()}
+let mergeTarget='';
+async function mergeClient(fromId){const into=mergeTarget;if(!into||into===fromId)return alert('Pick the client to merge into first.');const a=D.clients.find(x=>x.id===fromId),b=D.clients.find(x=>x.id===into);
+  if(D.runs.some(r=>r.client===fromId&&r.status!=='draft')||D.invoices.some(i=>i.client===fromId))return alert('This client has finalized runs or invoices; void/delete them first.');
+  if(!confirm(`Merge "${a.name}" into "${b.name}"?\nAccounts move over; "${a.name}" is deleted; its fee tiers are dropped in favor of "${b.name}"'s.`))return;
+  await db('accounts',sb.from('accounts').update({client_id:into}).eq('client_id',fromId));
+  await db('exclusions',sb.from('exclusions').update({client_id:into}).eq('client_id',fromId));
+  const drafts=D.runs.filter(r=>r.client===fromId).map(r=>r.id);for(const id of drafts)await db('billing_runs',sb.from('billing_runs').delete().eq('id',id));
+  await db('clients',sb.from('clients').delete().eq('id',fromId));
+  D.accounts.forEach(x=>{if(x.client===fromId)x.client=into});D.excl.forEach(x=>{if(x.client===fromId)x.client=into});D.tiers=D.tiers.filter(t=>t.client!==fromId);D.runs=D.runs.filter(r=>r.client!==fromId);D.clients=D.clients.filter(x=>x.id!==fromId);mergeTarget='';go('clients',into)}
 async function delClient(id){const c=D.clients.find(x=>x.id===id);if(D.runs.some(r=>r.client===id)||D.invoices.some(i=>i.client===id))return alert('This client has billing runs or invoices. Delete the draft runs and void/delete invoices first, or mark the client inactive instead.');
   if(!confirm(`Delete ${c.name} and everything under it? This cannot be undone.`))return;
   await db('clients',sb.from('clients').delete().eq('id',id));const ids=D.accounts.filter(a=>a.client===id).map(a=>a.id);
   D.clients=D.clients.filter(x=>x.id!==id);D.accounts=D.accounts.filter(a=>a.client!==id);D.tiers=D.tiers.filter(t=>t.client!==id);D.excl=D.excl.filter(e=>e.client!==id);D.positions=D.positions.filter(p=>!ids.includes(p.account));D.activity=D.activity.filter(p=>!ids.includes(p.account));go('clients')}
 async function setDebit(id,from){await db('accounts',sb.from('accounts').update({debit_account_id:from||null}).eq('id',id));D.accounts.find(x=>x.id===id).debitFrom=from||null;render()}
 async function toggleAcct(id){const a=D.accounts.find(x=>x.id===id);await db('accounts',sb.from('accounts').update({active:!a.active}).eq('id',id));a.active=!a.active;render()}
-async function addTier(c){const r=document.getElementById('trate').value;if(r==='')return;const mx=document.getElementById('tmax').value;const t={id:uid(),client:c,min:Number(document.getElementById('tmin').value||0),max:mx===''?null:Number(mx),rate:Number(r)/100};await db('fee_tiers',sb.from('fee_tiers').insert({id:t.id,client_id:c,tier_min:t.min,tier_max:t.max,annual_rate:t.rate}));D.tiers.push(t);render()}
+async function addTier(c){const r=document.getElementById('trate').value;if(r===''||Number(r)<=0)return alert('Rate must be greater than 0. To bill a client nothing, mark them inactive.');const mx=document.getElementById('tmax').value;const t={id:uid(),client:c,min:Number(document.getElementById('tmin').value||0),max:mx===''?null:Number(mx),rate:Number(r)/100};await db('fee_tiers',sb.from('fee_tiers').insert({id:t.id,client_id:c,tier_min:t.min,tier_max:t.max,annual_rate:t.rate}));D.tiers.push(t);render()}
+async function purgeZeroTiers(){const ids=D.tiers.filter(t=>!(t.rate>0)).map(t=>t.id);if(!ids.length)return;if(!confirm('Remove '+ids.length+' zero-rate tiers? Those clients will bill at the firm default.'))return;for(let i=0;i<ids.length;i+=200)await db('fee_tiers',sb.from('fee_tiers').delete().in('id',ids.slice(i,i+200)));D.tiers=D.tiers.filter(t=>t.rate>0);render()}
 async function delTier(id){await db('fee_tiers',sb.from('fee_tiers').delete().eq('id',id));D.tiers=D.tiers.filter(t=>t.id!==id);render()}
 async function addExcl(c){const typed=document.getElementById('es').value.split(/[\s,;]+/).map(normSec).filter(Boolean);
   const ticked=[...document.querySelectorAll('.exchk:checked')].map(x=>normSec(x.value));
@@ -283,7 +297,7 @@ function clientImportPanel(){const m=cpending.map;
 async function commitClients(){const{clients,accounts}=parseClients();const nw=clients.filter(c=>c.isNew);
   if(nw.length)await db('clients',sb.from('clients').insert(nw.map(c=>({id:c.id,name:c.name}))));
   if(accounts.length)await db('accounts',sb.from('accounts').insert(accounts.map(a=>({id:a.id,client_id:a.client,custodian:a.custodian,number:a.number,nickname:a.nickname}))));
-  const tiers=nw.filter(c=>c.rate!=null&&!isNaN(c.rate)).map(c=>({id:uid(),client:c.id,min:0,max:null,rate:c.rate}));
+  const tiers=nw.filter(c=>c.rate!=null&&!isNaN(c.rate)&&c.rate>0).map(c=>({id:uid(),client:c.id,min:0,max:null,rate:c.rate}));
   if(tiers.length)await db('fee_tiers',sb.from('fee_tiers').insert(tiers.map(t=>({id:t.id,client_id:t.client,tier_min:0,tier_max:null,annual_rate:t.rate}))));
   nw.forEach(c=>D.clients.push({id:c.id,name:c.name,active:true,notes:''}));D.accounts.push(...accounts);D.tiers.push(...tiers);cpending=null;render()}
 
@@ -299,7 +313,7 @@ function positions(){
   let html=`<h2>Positions</h2><p class="muted">Upload the month-end position spreadsheet once a month. Each row: account number, security ID, market value.</p>
   <div class="panel"><div class="row"><div class="f"><label>Month</label><input type="month" value="${pdate}" onchange="pdate=this.value;pending=null;render()"></div>
   <div class="f"><label>Spreadsheet (.xlsx or .csv)</label><input type="file" accept=".xlsx,.xls,.csv" onchange="readSheet(this)"></div></div>
-  <div class="muted">Values will be stored as of ${fd(me)}.${pos.length?` This month already has ${pos.length} positions; uploading again replaces them.`:''}</div>
+  <div class="muted">Values will be stored as of ${fd(me)}.${pos.length?` This month already has ${pos.length} positions. A new upload replaces positions only for the accounts in that file, so Schwab and Pershing files can be uploaded separately.`:''}</div>
   ${pos.length?`<div class="acts"><button class="btn d s" onclick="delMonth('${me}')">Delete all ${pos.length} positions for ${fm(pdate)}</button></div>`:''}</div>`;
   if(pending){
     const m=pending.map;
@@ -342,10 +356,10 @@ function preview(){const m=pending.map;if(!m.account||!(m.secId||m.cusip)||!m.va
   const{out,unmatched,bad}=parsePending();const total=out.reduce((s,p)=>s+p.value,0);
   return `${unmatched.length?`<div class="err">${unmatched.length} account number${unmatched.length===1?'':'s'} not set up under any client — these rows will be skipped: ${unmatched.map(esc).join(', ')}. Add them under Clients, then upload again.</div>`:''}
   ${bad.length?`<div class="err">${bad.length} row${bad.length===1?'':'s'} with unreadable values skipped: ${bad.slice(0,5).map(esc).join('; ')}${bad.length>5?'…':''}</div>`:''}
-  <div class="ok">${out.length} positions ready, total ${money(total)}, as of ${fd(monthEnd(pdate))}.</div>
+  ${(()=>{const ids=new Set(out.map(p=>p.account));const n=D.positions.filter(p=>p.date===monthEnd(pdate)&&ids.has(p.account)).length;return n?`<div class="note">${n} existing position rows for these ${ids.size} account${ids.size===1?'':'s'} will be replaced. Other accounts' positions for this month are kept.</div>`:''})()}<div class="ok">${out.length} positions ready for ${[...new Set(out.map(p=>p.account))].length} account(s), total ${money(total)}, as of ${fd(monthEnd(pdate))}.</div>
   <button class="btn" onclick="commitPending()" ${out.length?'':'disabled'}>Save ${out.length} positions for ${fm(pdate)}</button>`}
 async function delMonth(me){if(!confirm('Delete every position dated '+fd(me)+'?'))return;await db('positions',sb.from('positions').delete().eq('as_of',me));D.positions=D.positions.filter(p=>p.date!==me);render()}
-async function commitPending(){const{out}=parsePending();const me=monthEnd(pdate);await db('positions',sb.from('positions').delete().eq('as_of',me));for(let i=0;i<out.length;i+=500)await db('positions',sb.from('positions').insert(out.slice(i,i+500).map(p=>({account_id:p.account,as_of:p.date,sec_id:p.secId,cusip:p.cusip||'',descr:p.desc,value:p.value}))));D.positions=D.positions.filter(p=>p.date!==me).concat(out);D.mapping={...pending.map};await setSetting('mapping',D.mapping);pending=null;render()}
+async function commitPending(){const{out}=parsePending();const me=monthEnd(pdate);const ids=[...new Set(out.map(p=>p.account))];for(let i=0;i<ids.length;i+=200)await db('positions',sb.from('positions').delete().eq('as_of',me).in('account_id',ids.slice(i,i+200)));for(let i=0;i<out.length;i+=500)await db('positions',sb.from('positions').insert(out.slice(i,i+500).map(p=>({account_id:p.account,as_of:p.date,sec_id:p.secId,cusip:p.cusip||'',descr:p.desc,value:p.value}))));D.positions=D.positions.filter(p=>!(p.date===me&&ids.includes(p.account))).concat(out);D.mapping={...pending.map};await setSetting('mapping',D.mapping);pending=null;render()}
 
 // ---------- billing runs ----------
 function runs(){
@@ -357,9 +371,18 @@ function runs(){
   <div class="panel"><div class="row"><div class="f"><label>Month</label><select id="rm">${months.length?months.map(m=>`<option value="${m}">${fm(m)} (${daysIn(m)} days)</option>`).join(''):`<option value="">No positions uploaded yet</option>`}</select></div>
   <div class="f"><label>Client</label>${(()=>{const items=[{id:'ALL',label:'All active clients'}].concat(act.map(c=>({id:c.id,label:c.name})));regPicker('rcp',items,v=>{runClient=v});return picker('rcp',items,runClient,null,'All active clients')})()}<input type="hidden" id="rc"></div></div>
   <button class="btn" onclick="createRuns()" ${months.length?'':'disabled'}>Create draft run(s)</button><div id="rmsg"></div></div>
+  ${(()=>{const z=rs.filter(r=>r.status!=='void'&&r.billable>0&&!r.fee);return z.length?`<div class="err">${z.length} run${z.length===1?'':'s'} with billable value but a $0 fee — the client had a 0% tier when the run was created. Fix the tiers on the Clients page, then delete and recreate those drafts.</div>`:''})()}
   ${drafts.length?`<div class="note">${drafts.length} draft, ${money(dt)} unbilled</div>`:''}
-  ${rs.length?`<table><thead><tr><th>Client</th><th>Month</th><th class="n">Billable</th><th class="n">Fee</th><th></th></tr></thead><tbody>${rs.map(r=>`<tr class="click" onclick="go('runs','${r.id}')"><td>${esc(r.clientName)}</td><td>${fm(r.month)}</td><td class="n">${money(r.billable)}</td><td class="n">${money(r.fee)}</td><td><span class="pill ${r.status}">${r.status}</span></td></tr>`).join('')}</tbody></table>`:`<div class="empty">No runs yet. Upload positions, then create a draft run.</div>`}`;
+  ${rs.length?`<div class="panel"><div class="row"><div class="f"><label>Export a month to Excel (consolidated + one tab per custodian)</label><select id="xm">${[...new Set(rs.map(r=>r.month))].sort().reverse().map(m=>`<option value="${m}">${fm(m)}</option>`).join('')}</select></div><div class="f"><label>&nbsp;</label><button class="btn" onclick="exportMonth(document.getElementById('xm').value)">Export to Excel</button></div></div></div>`:''}
+  ${rs.length?`<table><thead><tr><th>Client</th><th>Month</th><th class="n">Billable</th><th class="n">Rate</th><th class="n">Fee</th><th></th></tr></thead><tbody>${rs.map(r=>`<tr class="click" onclick="go('runs','${r.id}')"><td>${esc(r.clientName)}</td><td>${fm(r.month)}</td><td class="n">${money(r.billable)}</td><td class="n">${pct(r.rate,2)}</td><td class="n">${money(r.fee)}${r.billable>0&&!r.fee?' <span class="pill x">0 fee</span>':''}</td><td><span class="pill ${r.status}">${r.status}</span></td></tr>`).join('')}</tbody></table>`:`<div class="empty">No runs yet. Upload positions, then create a draft run.</div>`}`;
 }
+function exportMonth(month){const runs=D.runs.filter(r=>r.month===month&&r.status!=='void');if(!runs.length)return alert('No runs for that month.');
+  const rows=[];runs.forEach(r=>{const accts=D.accounts.filter(a=>a.client===r.client);r.lines.forEach(l=>{const a=l.acctId?accts.find(x=>x.id===l.acctId):accts.find(x=>acctName(x)===l.label);
+    rows.push({Client:r.clientName,Custodian:a?a.custodian:'',"Account number":a?a.number:'',Account:l.label,Month:fm(month),"Values as of":r.vd,"Market value":l.mv,Excluded:l.excl,Billable:l.billable,"Fee share":l.fee??'',"Debited from":l.debitFrom||'',"Client total fee":r.fee,"Effective rate %":Math.round(r.rate*100000)/1000,Status:r.status,Invoice:r.invoiceNo||''})})});
+  const wb=XLSX.utils.book_new();const sheet=(name,data)=>{const ws=XLSX.utils.json_to_sheet(data);ws['!cols']=Object.keys(data[0]||{}).map(k=>({wch:Math.max(12,k.length+2)}));XLSX.utils.book_append_sheet(wb,ws,name.slice(0,31))};
+  sheet('Consolidated',rows);[...new Set(rows.map(x=>x.Custodian||'Unknown'))].sort().forEach(c=>sheet(c,rows.filter(x=>(x.Custodian||'Unknown')===c)));
+  const summary=runs.map(r=>({Client:r.clientName,Gross:r.gross,Excluded:r.exclT,Billable:r.billable,"Effective rate %":Math.round(r.rate*100000)/1000,Fee:r.fee,Status:r.status,Invoice:r.invoiceNo||''}));sheet('By client',summary);
+  XLSX.writeFile(wb,'geneva-billing-'+month+'.xlsx')}
 async function createRuns(){
   const month=document.getElementById('rm').value,cid=runClient||'ALL';if(!month)return;
   const me=monthEnd(month),days=daysIn(month);
