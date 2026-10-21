@@ -379,7 +379,7 @@ function runs(){
   return `<h2>Billing runs</h2><p class="muted">Fee = month-end billable value × annual rate ÷ 365 × days in the month.</p>
   <div class="panel"><div class="row"><div class="f"><label>Month</label><select id="rm">${months.length?months.map(m=>`<option value="${m}">${fm(m)} (${daysIn(m)} days)</option>`).join(''):`<option value="">No positions uploaded yet</option>`}</select></div>
   <div class="f"><label>Client</label>${(()=>{const items=[{id:'ALL',label:'All active clients'}].concat(act.map(c=>({id:c.id,label:c.name})));regPicker('rcp',items,v=>{runClient=v});return picker('rcp',items,runClient,null,'All active clients')})()}<input type="hidden" id="rc"></div></div>
-  <button class="btn" onclick="createRuns()" ${months.length?'':'disabled'}>Create draft run(s)</button><div id="rmsg"></div></div>
+  <div class="acts"><button class="btn" onclick="createRuns()" ${months.length?'':'disabled'}>Create draft run(s)</button><button class="btn g" onclick="createRuns(true)" ${months.length?'':'disabled'}>Recreate drafts (delete existing first)</button><button class="btn d" onclick="deleteDrafts()" ${months.length?'':'disabled'}>Delete all drafts for this month</button><button class="btn d" onclick="voidFinals()" ${months.length?'':'disabled'}>Void all finalized runs for this month</button></div><div id="rmsg"></div></div>
   ${(()=>{const z=rs.filter(r=>r.status!=='void'&&r.billable>0&&!r.fee);return z.length?`<div class="err">${z.length} run${z.length===1?'':'s'} with billable value but a $0 fee — the client had a 0% tier when the run was created. Fix the tiers on the Clients page, then delete and recreate those drafts.</div>`:''})()}
   ${drafts.length?`<div class="note">${drafts.length} draft, ${money(dt)} unbilled</div>`:''}
   ${rs.length?`<div class="panel"><div class="row"><div class="f"><label>Export a month to Excel (consolidated + one tab per custodian)</label><select id="xm">${[...new Set(rs.map(r=>r.month))].sort().reverse().map(m=>`<option value="${m}">${fm(m)}</option>`).join('')}</select></div><div class="f"><label>&nbsp;</label><button class="btn" onclick="exportMonth(document.getElementById('xm').value)">Export to Excel</button></div></div></div>`:''}
@@ -392,8 +392,23 @@ function exportMonth(month){const runs=D.runs.filter(r=>r.month===month&&r.statu
   sheet('Consolidated',rows);[...new Set(rows.map(x=>x.Custodian||'Unknown'))].sort().forEach(c=>sheet(c,rows.filter(x=>(x.Custodian||'Unknown')===c)));
   const summary=runs.map(r=>({Client:r.clientName,Gross:r.gross,Excluded:r.exclT,Billable:r.billable,"Effective rate %":Math.round(r.rate*100000)/1000,Fee:r.fee,Status:r.status,Invoice:r.invoiceNo||''}));sheet('By client',summary);
   XLSX.writeFile(wb,'geneva-billing-'+month+'.xlsx')}
-async function createRuns(){
+async function deleteDrafts(quiet){const month=document.getElementById('rm').value,cid=runClient||'ALL';if(!month)return 0;
+  const ids=D.runs.filter(r=>r.month===month&&r.status==='draft'&&(cid==='ALL'||r.client===cid)).map(r=>r.id);
+  if(!ids.length){if(!quiet)alert('No draft runs for '+fm(month)+(cid==='ALL'?'':' for that client')+'.');return 0}
+  if(!quiet&&!confirm('Delete '+ids.length+' draft run'+(ids.length===1?'':'s')+' for '+fm(month)+'? Finalized runs are not touched.'))return 0;
+  for(let i=0;i<ids.length;i+=200)await db('billing_runs',sb.from('billing_runs').delete().in('id',ids.slice(i,i+200)));
+  D.runs=D.runs.filter(r=>!ids.includes(r.id));if(!quiet)render();return ids.length}
+async function voidFinals(){const month=document.getElementById('rm').value,cid=runClient||'ALL';if(!month)return;
+  const runs=D.runs.filter(r=>r.month===month&&r.status==='final'&&(cid==='ALL'||r.client===cid));
+  if(!runs.length)return alert('No finalized runs for '+fm(month)+(cid==='ALL'?'':' for that client')+'.');
+  const inv=D.invoices.filter(i=>runs.some(r=>r.id===i.runId));
+  if(!confirm('Void '+runs.length+' finalized run'+(runs.length===1?'':'s')+' for '+fm(month)+'?'+(inv.length?'\n'+inv.length+' invoice'+(inv.length===1?'':'s')+' will be deleted (numbers are not reused).':'')+'\nVoided runs stay in history.'))return;
+  if(inv.length){const paths=inv.map(i=>i.path);for(let i=0;i<paths.length;i+=100)await sb.storage.from('invoices').remove(paths.slice(i,i+100));const ids=inv.map(i=>i.id);for(let i=0;i<ids.length;i+=200)await db('invoices',sb.from('invoices').delete().in('id',ids.slice(i,i+200)));D.invoices=D.invoices.filter(i=>!ids.includes(i.id))}
+  const ids=runs.map(r=>r.id);for(let i=0;i<ids.length;i+=200)await db('billing_runs',sb.from('billing_runs').update({status:'void'}).in('id',ids.slice(i,i+200)));
+  runs.forEach(r=>r.status='void');render()}
+async function createRuns(recreate){
   const month=document.getElementById('rm').value,cid=runClient||'ALL';if(!month)return;
+  if(recreate){if(!confirm('Delete existing drafts for '+fm(month)+' and recreate them?'))return;await deleteDrafts(true)}
   const me=monthEnd(month),days=daysIn(month);
   const targets=cid==='ALL'?D.clients.filter(c=>c.active):D.clients.filter(c=>c.id===cid);const ok=[],bad=[];
   for(const c of targets){
