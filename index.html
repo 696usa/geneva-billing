@@ -655,18 +655,21 @@ function makeInvoicePdf(runs,no,opt){
     cols.forEach(c=>txt(c.h,c.x,y,{s:7.5,c:grey,a:c.a}));y+=5;rule(y);y+=13;
     rows.forEach(rw=>{need(16);cols.forEach((c,i)=>txt(rw[i],c.x,y,{s:9,a:c.a,b:c.b,c:c.muted&&i===0?grey:ink}));y+=14});
     if(foot){rule(y-8,brown,0.8);cols.forEach((c,i)=>txt(foot[i],c.x,y+5,{s:9,b:1,a:c.a}));y+=18}y+=18};
-  for(const r of runs){
-    const label=runs.length>1?r.clientName:'Accounts';
-    table(label,[{h:'Account',x:L},{h:'Market value',x:345,a:'right'},{h:'Excluded',x:445,a:'right'},{h:'Billable',x:R,a:'right'}],
-      r.lines.map(l=>[l.label,money(l.mv),l.excl?'-'+money(l.excl):'',money(l.billable)]),['Total',money(r.gross),r.exclT?'-'+money(r.exclT):'',money(r.billable)]);
-    if(r.exclList.length)table(runs.length>1?null:'Excluded positions',[{h:'Account',x:L},{h:'Security',x:200},{h:'Value',x:R,a:'right'}],r.exclList.map(e=>[e.acct,e.secId+(e.desc?'  '+e.desc:''),money(e.value)]),null);
-    const tiersUsed=r.tiers.filter(t=>t.slice>0);const rateTxt=tiersUsed.length===1?pct(tiersUsed[0].rate,2):pct(r.rate,3)+' effective';
-    table(runs.length>1?null:'Fee calculation',[{h:'Account',x:L},{h:'Billable value',x:330,a:'right'},{h:'Annual rate',x:430,a:'right'},{h:'Fee for period',x:R,a:'right'}],
-      r.lines.filter(l=>l.billable>0).map(l=>[l.label,money(l.billable),rateTxt,money(l.fee||0)]),
-      ['Fee for '+fm(r.month)+' ('+r.days+' days)',money(r.billable),'',money(r.fee)]);
-    if(tiersUsed.length>1){need(16);txt('Marginal schedule: '+tiersUsed.map(t=>money(t.min)+(t.max==null?' and above':'–'+money(t.max))+' at '+pct(t.rate,2)).join('; ')+'. Fee = billable value x rate / 365 x '+r.days+' days.',L,y-6,{s:8,c:grey});y+=24}
-  }
-  if(runs.length>1)table('Household summary',[{h:'Client',x:L},{h:'Billable',x:400,a:'right'},{h:'Fee',x:R,a:'right'}],runs.map(g=>[g.clientName,money(g.billable),money(g.fee)]),['Total',money(bill),money(total)]);
+  // one table: every account, grouped by client when it's a household
+  const cols=[{h:'Account',x:L},{h:'Market value',x:300,a:'right'},{h:'Billable value',x:395,a:'right'},{h:'Rate',x:450,a:'right'},{h:'Fee',x:R,a:'right'}];
+  const rows=[];
+  for(const r of runs){const tu=r.tiers.filter(t=>t.slice>0);const rateTxt=tu.length===1?pct(tu[0].rate,2):pct(r.rate,3);
+    if(runs.length>1)rows.push([r.clientName,'','','','',true]);
+    const accts=D.accounts.filter(a=>a.client===r.client);
+    r.lines.filter(l=>l.mv>0||l.billable>0).forEach(l=>{const a=l.acctId?accts.find(x=>x.id===l.acctId):null;const num=a?a.number:'';const label=a&&a.nickname?a.nickname+'  '+num:l.label;
+      rows.push([label.length>46?label.slice(0,44)+'…':label,money(l.mv),money(l.billable),rateTxt,money(l.fee||0)])})}
+  need(60);txt('Fee calculation',L,y,{s:10.5,b:1,c:brown});y+=8;rule(y,brown,0.8);y+=14;
+  cols.forEach(c=>txt(c.h,c.x,y,{s:7.5,c:grey,a:c.a}));y+=5;rule(y);y+=13;
+  rows.forEach(rw=>{need(16);if(rw[5]){y+=4;txt(rw[0],L,y,{s:9,b:1,c:brown});y+=15;return}cols.forEach((c,i)=>txt(rw[i],c.x,y,{s:9,a:c.a}));y+=14});
+  rule(y-8,brown,0.8);txt('Total for '+fm(r0.month)+' ('+r0.days+' days)',L,y+5,{s:9,b:1});txt(money(runs.reduce((s,g)=>s+g.gross,0)),300,y+5,{s:9,b:1,a:'right'});txt(money(bill),395,y+5,{s:9,b:1,a:'right'});txt(money(total),R,y+5,{s:9,b:1,a:'right'});y+=24;
+  const excl=runs.flatMap(r=>r.exclList);if(excl.length){need(14);txt('Billable value excludes '+excl.length+' position'+(excl.length===1?'':'s')+' ('+money(excl.reduce((s,e)=>s+e.value,0))+'): '+[...new Set(excl.map(e=>e.secId))].slice(0,12).join(', ')+(new Set(excl.map(e=>e.secId)).size>12?', …':'')+'.',L,y,{s:8,c:grey});y+=14}
+  const multi=runs.filter(r=>r.tiers.filter(t=>t.slice>0).length>1);if(multi.length){need(14);txt('Tiered rates shown as the effective annual rate. Fee = billable value x rate / 365 x '+r0.days+' days.',L,y,{s:8,c:grey});y+=14}
+  y+=10;
   need(40);rule(y,tan,1);y+=16;if(F.terms)txt(F.terms,L,y,{s:8.5,c:grey});
   const n=doc.getNumberOfPages();for(let i=1;i<=n;i++){doc.setPage(i);txt(no+'  ·  '+(opt.billToName||r0.clientName)+'  ·  page '+i+' of '+n,L,772,{s:7,c:grey});txt('Ref '+r0.id.slice(0,8),R,772,{s:7,c:grey,a:'right'})}
   return doc.output('blob')}
