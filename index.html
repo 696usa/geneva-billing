@@ -102,6 +102,7 @@ const MIGRATIONS=[
   alter table clients add column if not exists household_id uuid references households(id) on delete set null;
   alter table invoices add column if not exists run_ids jsonb not null default '[]'::jsonb;
   alter table invoices add column if not exists household_name text not null default '';`},
+ {id:'v7_nobill',sql:`alter table accounts add column if not exists bill boolean not null default true;`},
 ];
 async function runMigrations(){
   const {data:rows,error}=await sb.from('settings').select('value').eq('key','migrations');
@@ -130,7 +131,7 @@ async function loadAll(){
   D=fresh();
   D.clients=c.map(x=>({id:x.id,name:x.name,active:x.active,notes:x.notes,household:x.household_id||null}));
   D.households=hh.map(x=>({id:x.id,name:x.name,billTo:x.bill_to_client_id||null}));
-  D.accounts=a.map(x=>({id:x.id,client:x.client_id,custodian:x.custodian,number:x.number,nickname:x.nickname,active:x.active,debitFrom:x.debit_account_id||null}));
+  D.accounts=a.map(x=>({id:x.id,client:x.client_id,custodian:x.custodian,number:x.number,nickname:x.nickname,active:x.active,debitFrom:x.debit_account_id||null,bill:x.bill!==false}));
   D.tiers=t.map(x=>({id:x.id,client:x.client_id,min:+x.tier_min,max:x.tier_max==null?null:+x.tier_max,rate:+x.annual_rate}));
   D.excl=e.map(x=>({id:x.id,client:x.client_id,account:x.account_id,secId:x.sec_id,note:x.note}));
   D.positions=p.map(x=>({account:x.account_id,date:x.as_of,secId:x.sec_id,cusip:x.cusip||'',desc:x.descr,value:+x.value}));
@@ -227,7 +228,7 @@ function clientDetail(){
   ${c.household?`<div class="f"><label>Household bill-to</label><select onchange="setBillTo('${c.household}',this.value)">${D.clients.filter(x=>x.household===c.household).map(x=>`<option value="${x.id}" ${D.households.find(h=>h.id===c.household)?.billTo===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select></div>`:''}</div></div>
 
   <h3>Accounts</h3><p class="muted">Account numbers must match the spreadsheet (spaces and dashes are ignored).</p>
-  ${accts.length?`<table><thead><tr><th>Custodian</th><th>Number</th><th>Nickname</th><th>Fee debited from</th><th></th></tr></thead><tbody>${accts.map(a=>`<tr><td>${a.custodian}</td><td>${esc(a.number)}</td><td>${esc(a.nickname)}</td><td>${(()=>{const items=accts.filter(o=>o.id!==a.id&&o.active).map(o=>({id:o.id,label:pickLabel(o)}));regPicker('dbt-'+a.id,items,v=>setDebit(a.id,v));return picker('dbt-'+a.id,items,a.debitFrom,null,'This account')})()}</td><td class="n"><button class="btn g s" onclick="toggleAcct('${a.id}')">${a.active?'Deactivate':'Reactivate'}</button> <button class="btn d s" onclick="delAcct('${a.id}')">Delete</button></td></tr>`).join('')}</tbody></table>`:''}
+  ${accts.length?`<table><thead><tr><th>Custodian</th><th>Number</th><th>Nickname</th><th>Bill</th><th>Fee debited from</th><th></th></tr></thead><tbody>${accts.map(a=>`<tr><td>${a.custodian}</td><td>${esc(a.number)}</td><td>${esc(a.nickname)}</td><td><select onchange="setBill('${a.id}',this.value==='1')"><option value="1" ${a.bill?'selected':''}>Yes</option><option value="0" ${a.bill?'':'selected'}>No (0%)</option></select></td><td>${(()=>{const items=accts.filter(o=>o.id!==a.id&&o.active).map(o=>({id:o.id,label:pickLabel(o)}));regPicker('dbt-'+a.id,items,v=>setDebit(a.id,v));return picker('dbt-'+a.id,items,a.debitFrom,null,'This account')})()}</td><td class="n"><button class="btn g s" onclick="toggleAcct('${a.id}')">${a.active?'Deactivate':'Reactivate'}</button> <button class="btn d s" onclick="delAcct('${a.id}')">Delete</button></td></tr>`).join('')}</tbody></table>`:''}
   <div class="panel" style="margin-top:10px"><div class="row"><div class="f"><label>Custodian</label><select id="ac">${['Schwab','Pershing','IBKR','Other'].map(o=>`<option>${o}</option>`).join('')}</select></div><div class="f"><label>Account number</label><input id="an"></div></div>
   <div class="f"><label>Nickname</label><input id="ak" placeholder="e.g. Joint taxable"></div><button class="btn" onclick="addAcct('${c.id}')">Add account</button></div>
 
@@ -281,6 +282,7 @@ async function delClient(id){const c=D.clients.find(x=>x.id===id);if(D.runs.some
   if(!confirm(`Delete ${c.name} and everything under it? This cannot be undone.`))return;
   await db('clients',sb.from('clients').delete().eq('id',id));const ids=D.accounts.filter(a=>a.client===id).map(a=>a.id);
   D.clients=D.clients.filter(x=>x.id!==id);D.accounts=D.accounts.filter(a=>a.client!==id);D.tiers=D.tiers.filter(t=>t.client!==id);D.excl=D.excl.filter(e=>e.client!==id);D.positions=D.positions.filter(p=>!ids.includes(p.account));D.activity=D.activity.filter(p=>!ids.includes(p.account));go('clients')}
+async function setBill(id,on){await db('accounts',sb.from('accounts').update({bill:on}).eq('id',id));D.accounts.find(x=>x.id===id).bill=on;render()}
 async function setDebit(id,from){await db('accounts',sb.from('accounts').update({debit_account_id:from||null}).eq('id',id));D.accounts.find(x=>x.id===id).debitFrom=from||null;render()}
 async function toggleAcct(id){const a=D.accounts.find(x=>x.id===id);await db('accounts',sb.from('accounts').update({active:!a.active}).eq('id',id));a.active=!a.active;render()}
 async function addTier(c){const r=document.getElementById('trate').value;if(r===''||Number(r)<=0)return alert('Rate must be greater than 0. To bill a client nothing, mark them inactive.');const mx=document.getElementById('tmax').value;const t={id:uid(),client:c,min:Number(document.getElementById('tmin').value||0),max:mx===''?null:Number(mx),rate:Number(r)/100};await db('fee_tiers',sb.from('fee_tiers').insert({id:t.id,client_id:c,tier_min:t.min,tier_max:t.max,annual_rate:t.rate}));D.tiers.push(t);render()}
@@ -307,18 +309,18 @@ function readClientSheet(inp){const f=inp.files[0];if(!f)return;const r=new File
     let hi=rows.findIndex(r=>r.filter(c=>String(c).trim()!=='').length>=2);if(hi<0)hi=0;const headers=rows[hi].map((h,i)=>String(h).trim()||`Column ${i+1}`);
     const data=rows.slice(hi+1).map(r=>Object.fromEntries(headers.map((h,i)=>[h,r[i]])));
     const map={client:'',custodian:'',account:'',nickname:'',rate:''};headers.forEach(h=>{const g=cguess(h);if(g&&!map[g])map[g]=h});
-    cpending={name:f.name,headers,rows:data,map};render()};
+    cpending={name:f.name,headers,rows:data,map,group:false};render()};
   r.readAsArrayBuffer(f);inp.value=''}
 function parseClients(){const m=cpending.map;const clients={},accounts=[],skipped=[];
   for(const r of cpending.rows){const name=String(r[m.client]??'').trim();const num=String(r[m.account]??'').trim();if(!name&&!num)continue;
     if(!name){skipped.push('account '+num+' has no client name');continue}
-    const key=name.toLowerCase();const existing=D.clients.find(c=>c.name.toLowerCase()===key);
+    const key=cpending.group?name.toLowerCase():(name.toLowerCase()+'|'+num);const existing=cpending.group?D.clients.find(c=>c.name.toLowerCase()===key):null;
     if(!clients[key])clients[key]={name,id:existing?existing.id:uid(),isNew:!existing,rate:m.rate&&r[m.rate]!==''?toNum(String(r[m.rate]).replace('%',''))/100:null};
     if(num){if(D.accounts.some(a=>normNum(a.number)===normNum(num))||accounts.some(a=>normNum(a.number)===normNum(num))){skipped.push('account '+num+' already exists');continue}
       const cust=m.custodian?String(r[m.custodian]??'').trim():'';accounts.push({id:uid(),client:clients[key].id,custodian:['Schwab','Pershing','IBKR'].find(x=>x.toLowerCase()===cust.toLowerCase())||(cust?'Other':'Other'),number:num,nickname:m.nickname?String(r[m.nickname]??'').trim():'',active:true})}}
   return{clients:Object.values(clients),accounts,skipped}}
 function clientImportPanel(){const m=cpending.map;
-  const mapping=`<div class="panel"><b>${esc(cpending.name)}</b> — ${cpending.rows.length} rows. Match the columns:<div class="row" style="margin-top:10px">${CFIELDS.map(([k,l])=>`<div class="f"><label>${l}</label><select onchange="cpending.map.${k}=this.value;render()"><option value="">—</option>${cpending.headers.map(h=>`<option ${m[k]===h?'selected':''}>${esc(h)}</option>`).join('')}</select></div>`).join('')}</div>`;
+  const mapping=`<div class="panel"><b>${esc(cpending.name)}</b> — ${cpending.rows.length} rows. Match the columns:<div class="f" style="margin-top:8px"><label style="display:flex;gap:6px;align-items:center;font-size:14px;color:var(--text)"><input type="checkbox" style="width:auto" ${cpending.group?'checked':''} onchange="cpending.group=this.checked;render()"> Group rows with the same client name into one client (off = one client per row)</label></div><div class="row" style="margin-top:10px">${CFIELDS.map(([k,l])=>`<div class="f"><label>${l}</label><select onchange="cpending.map.${k}=this.value;render()"><option value="">—</option>${cpending.headers.map(h=>`<option ${m[k]===h?'selected':''}>${esc(h)}</option>`).join('')}</select></div>`).join('')}</div>`;
   if(!m.client)return mapping+`<div class="note">Pick the client name column.</div><button class="btn g" onclick="cpending=null;render()">Cancel</button></div>`;
   const{clients,accounts,skipped}=parseClients();const nw=clients.filter(c=>c.isNew);
   return mapping+`${skipped.length?`<div class="err">${skipped.length} row${skipped.length===1?'':'s'} skipped: ${skipped.slice(0,6).map(esc).join('; ')}${skipped.length>6?'…':''}</div>`:''}
@@ -443,8 +445,9 @@ async function createRuns(recreate){
     for(const a of accts){const ps=pos.filter(p=>p.account===a.id);if(!ps.length)continue;
       const mv=ps.reduce((s,p)=>s+p.value,0);let ex=0;
       ps.forEach(p=>{if(isExcluded(c.id,a.id,p.secId,p.cusip)){ex+=p.value;exclList.push({acct:acctName(a),secId:p.secId+(p.cusip&&p.cusip!==p.secId?' / '+p.cusip:''),desc:p.desc,value:p.value})}});
+      if(a.bill===false){lines.push({acctId:a.id,label:acctName(a),mv,excl:0,billable:0,noBill:true,debitFrom:acctName(a)});continue}
       lines.push({acctId:a.id,label:acctName(a),mv,excl:ex,billable:mv-ex,debitFrom:a.debitFrom&&accts.some(o=>o.id===a.debitFrom)?acctName(accts.find(o=>o.id===a.debitFrom)):acctName(a)})}
-    const gross=lines.reduce((s,l)=>s+l.mv,0),exclT=lines.reduce((s,l)=>s+l.excl,0),billable=Math.max(0,gross-exclT);
+    const gross=lines.reduce((s,l)=>s+l.mv,0),exclT=lines.reduce((s,l)=>s+l.excl,0),billable=Math.max(0,lines.reduce((s,l)=>s+Math.max(0,l.billable),0));
     const tb=marginal(tiers,billable),annual=tb.reduce((s,t)=>s+t.fee,0),fee=Math.round(annual*days/365*100)/100;
     // allocate the household fee to accounts pro rata by billable value, then roll up by debit account
     const posL=lines.filter(l=>l.billable>0),posT=posL.reduce((s,l)=>s+l.billable,0);let alloc=0;
@@ -471,7 +474,7 @@ function runDetail(){
   <tfoot><tr><td>Total</td><td class="n">${money(r.gross)}</td><td class="n">${r.exclT?'−'+money(r.exclT):''}</td><td class="n">${money(r.billable)}</td></tr></tfoot></table>
   ${r.exclList.length?`<h3>Excluded positions</h3><table><thead><tr><th>Account</th><th>Security</th><th class="n">Value</th></tr></thead><tbody>${r.exclList.map(e=>`<tr><td>${esc(e.acct)}</td><td><b>${esc(e.secId)}</b> <span class="muted">${esc(e.desc)}</span></td><td class="n">${money(e.value)}</td></tr>`).join('')}</tbody></table>`:''}
   <h3>Fee calculation</h3>${(()=>{const tu=r.tiers.filter(t=>t.slice>0);const rateTxt=tu.length===1?pct(tu[0].rate,2):pct(r.rate,3)+' effective';return`<table><thead><tr><th>Account</th><th class="n">Billable</th><th class="n">Annual rate</th><th class="n">Fee for period</th></tr></thead><tbody>
-  ${r.lines.filter(l=>l.billable>0).map(l=>`<tr><td>${esc(l.label)}</td><td class="n">${money(l.billable)}</td><td class="n">${rateTxt}</td><td class="n">${money(l.fee||0)}</td></tr>`).join('')}</tbody>
+  ${r.lines.filter(l=>l.billable>0||l.noBill).map(l=>`<tr><td>${esc(l.label)}${l.noBill?' <span class="pill">not billed</span>':''}</td><td class="n">${money(l.billable)}</td><td class="n">${l.noBill?'0.00%':rateTxt}</td><td class="n">${money(l.fee||0)}</td></tr>`).join('')}</tbody>
   <tfoot><tr><td>Fee for ${fm(r.month)} (${r.days} days)</td><td class="n">${money(r.billable)}</td><td></td><td class="n">${money(r.fee)}</td></tr></tfoot></table>${tu.length>1?`<p class="muted">Marginal schedule: ${tu.map(t=>money(t.min)+(t.max==null?' and above':'–'+money(t.max))+' at '+pct(t.rate,2)).join('; ')}.</p>`:''}`})()}
   <p class="muted" style="margin-top:18px">Created ${new Date(r.created).toLocaleString()}${r.finalized?`, finalized ${new Date(r.finalized).toLocaleString()}`:''}. Ref ${r.id.slice(0,8)}.</p></div>`;
 }
@@ -662,7 +665,7 @@ function makeInvoicePdf(runs,no,opt){
     if(runs.length>1)rows.push([r.clientName,'','','','',true]);
     const accts=D.accounts.filter(a=>a.client===r.client);
     r.lines.filter(l=>l.mv>0||l.billable>0).forEach(l=>{const a=l.acctId?accts.find(x=>x.id===l.acctId):null;const num=a?a.number:'';const label=a&&a.nickname?a.nickname+'  '+num:l.label;
-      rows.push([label.length>46?label.slice(0,44)+'…':label,money(l.mv),money(l.billable),rateTxt,money(l.fee||0)])})}
+      rows.push([label.length>46?label.slice(0,44)+'…':label,money(l.mv),money(l.billable),l.noBill?'0.00%':rateTxt,money(l.fee||0)])})}
   need(60);txt('Fee calculation',L,y,{s:10.5,b:1,c:brown});y+=8;rule(y,brown,0.8);y+=14;
   cols.forEach(c=>txt(c.h,c.x,y,{s:7.5,c:grey,a:c.a}));y+=5;rule(y);y+=13;
   rows.forEach(rw=>{need(16);if(rw[5]){y+=4;txt(rw[0],L,y,{s:9,b:1,c:brown});y+=15;return}cols.forEach((c,i)=>txt(rw[i],c.x,y,{s:9,a:c.a}));y+=14});
