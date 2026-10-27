@@ -638,6 +638,7 @@ function makeInvoicePdf(runs,no,opt){
   const {jsPDF}=window.jspdf;const doc=new jsPDF({unit:'pt',format:'letter'});const W=612,L=54,R=558;let y=0;
   const brown=[74,61,46],tan=[196,184,144],cream=[249,247,240],grey=[120,113,100],line=[221,216,204],ink=[40,34,28];
   const txt=(s,x,yy,o={})=>{doc.setFont('helvetica',o.b?'bold':'normal');doc.setFontSize(o.s||9.5);doc.setTextColor(...(o.c||ink));doc.text(String(s),x,yy,{align:o.a||'left'})};
+  const fit=(str,maxW)=>{doc.setFont('helvetica','normal');doc.setFontSize(9);str=String(str);if(doc.getTextWidth(str)<=maxW)return str;while(str.length>3&&doc.getTextWidth(str+'…')>maxW)str=str.slice(0,-1);return str+'…'};
   const rule=(yy,c=line,w=0.6)=>{doc.setDrawColor(...c);doc.setLineWidth(w);doc.line(L,yy,R,yy)};
   const page=()=>{doc.addPage();y=60};const need=h=>{if(y+h>730)page()};
   // header
@@ -664,8 +665,8 @@ function makeInvoicePdf(runs,no,opt){
   for(const r of runs){const tu=r.tiers.filter(t=>t.slice>0);const rateTxt=tu.length===1?pct(tu[0].rate,2):pct(r.rate,3);
     if(runs.length>1)rows.push([r.clientName,'','','','',true]);
     const accts=D.accounts.filter(a=>a.client===r.client);
-    r.lines.filter(l=>l.mv>0||l.billable>0).forEach(l=>{const a=l.acctId?accts.find(x=>x.id===l.acctId):null;const num=a?a.number:'';const label=a&&a.nickname?a.nickname+'  '+num:l.label;
-      rows.push([label.length>46?label.slice(0,44)+'…':label,money(l.mv),money(l.billable),l.noBill?'0.00%':rateTxt,money(l.fee||0)])})}
+    r.lines.filter(l=>l.mv>0||l.billable>0).forEach(l=>{const a=l.acctId?accts.find(x=>x.id===l.acctId):null;const num=a?a.number:'';const label=a?(num+(a.nickname?'  '+a.nickname:''))+'':l.label;
+      rows.push([fit(label,175),money(l.mv),money(l.billable),l.noBill?'0.00%':rateTxt,money(l.fee||0)])})}
   need(60);txt('Fee calculation',L,y,{s:10.5,b:1,c:brown});y+=8;rule(y,brown,0.8);y+=14;
   cols.forEach(c=>txt(c.h,c.x,y,{s:7.5,c:grey,a:c.a}));y+=5;rule(y);y+=13;
   rows.forEach(rw=>{need(16);if(rw[5]){y+=4;txt(rw[0],L,y,{s:9,b:1,c:brown});y+=15;return}cols.forEach((c,i)=>txt(rw[i],c.x,y,{s:9,a:c.a}));y+=14});
