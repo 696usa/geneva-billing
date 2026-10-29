@@ -1,0 +1,21 @@
+name: Pershing nightly pull
+on:
+  schedule:
+    - cron: '30 7 * * 1-6'   # 07:30 UTC = 03:30 ET, Mon-Sat (files post overnight)
+  workflow_dispatch: {}
+jobs:
+  pull:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: pip install requests paramiko
+      - run: python feeds/pershing_pull.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          PERSHING_HOST: mft-sftp-key.sfg.bny.com
+          PERSHING_PORT: '2222'
+          PERSHING_USER: SFD_EXTSFD_GENEVA_SFT003
+          PERSHING_SSH_KEY: ${{ secrets.PERSHING_SSH_KEY }}
