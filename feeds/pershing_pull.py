@@ -215,6 +215,7 @@ def main():
                         sec = 'CASH'; cusip = ''; desc = 'Cash (' + r['cusip'][:3] + ')'
                     else:
                         info = isca.get(r['cusip'], {}); sec = r['sym'] or info.get('sym') or r['cusip']; cusip = r['cusip']; desc = r['desc'] or info.get('desc', '')
+                    carry.pop((a['id'], '', r['cusip']), None)  # drop an untyped row carried from a pre-v27 snapshot; today's typed rows replace it
                     if r['qty'] == 0 and r['value'] == 0:
                         carry.pop(key, None); continue
                     carry[key] = dict(account_id=a['id'], as_of=d, sec_id=sec, cusip=cusip, descr=desc, value=round(r['value'], 2), acct_type=r['atype'])
