@@ -199,25 +199,25 @@ def main():
                     # carry forward prior snapshot for Pershing accounts, then overlay today's changes
                     pid = [a['id'] for a in accts if a['custodian'] == 'Pershing']
                     if pid:
-                        prev = db.get('positions', {'select': 'account_id,as_of,sec_id,cusip,descr,value', 'as_of': f'lt.{d}', 'account_id': 'in.(' + ','.join(pid) + ')', 'order': 'as_of.desc'})
+                        prev = db.get('positions', {'select': 'account_id,as_of,sec_id,cusip,descr,value,acct_type', 'as_of': f'lt.{d}', 'account_id': 'in.(' + ','.join(pid) + ')', 'order': 'as_of.desc'})
                         if prev:
                             last = prev[0]['as_of']
                             for p in prev:
                                 if p['as_of'] == last and p['sec_id'] != 'BNYFDIC':
-                                    carry[(p['account_id'], p['cusip'] or p['sec_id'])] = dict(account_id=p['account_id'], as_of=d, sec_id=p['sec_id'], cusip=p['cusip'], descr=p['descr'], value=p['value'])
+                                    carry[(p['account_id'], p.get('acct_type') or '', p['cusip'] or p['sec_id'])] = dict(account_id=p['account_id'], as_of=d, sec_id=p['sec_id'], cusip=p['cusip'], descr=p['descr'], value=p['value'], acct_type=p.get('acct_type') or '')
                 unknown = set()
                 for r in rows:
                     a = by_num.get(norm(r['acct']))
                     if not a:
                         unknown.add(r['acct']); continue
-                    key = (a['id'], r['cusip'])
+                    key = (a['id'], r['atype'], r['cusip'])  # account type (cash/margin/short) kept separate so same CUSIP in two types does not overwrite
                     if r['cash']:
                         sec = 'CASH'; cusip = ''; desc = 'Cash (' + r['cusip'][:3] + ')'
                     else:
                         info = isca.get(r['cusip'], {}); sec = r['sym'] or info.get('sym') or r['cusip']; cusip = r['cusip']; desc = r['desc'] or info.get('desc', '')
                     if r['qty'] == 0 and r['value'] == 0:
                         carry.pop(key, None); continue
-                    carry[key] = dict(account_id=a['id'], as_of=d, sec_id=sec, cusip=cusip, descr=desc, value=round(r['value'], 2))
+                    carry[key] = dict(account_id=a['id'], as_of=d, sec_id=sec, cusip=cusip, descr=desc, value=round(r['value'], 2), acct_type=r['atype'])
                 if unknown: log.append(f"{d} GCUS: {len(unknown)} account(s) not set up in app: {', '.join(sorted(unknown)[:8])}")
                 new_pos.update(carry)
             if 'ECMB' in kinds:
@@ -226,7 +226,7 @@ def main():
                     a = by_num.get(norm(r['acct']))
                     if not a: continue
                     sec = (r['fund'] + 'FDIC') if 'FDIC' in r['cusip'].upper() else (isca.get(r['cusip'], {}).get('sym') or r['cusip'] or r['fund'])
-                    new_pos[(a['id'], sec)] = dict(account_id=a['id'], as_of=d, sec_id=sec, cusip=r['cusip'] if r['cusip'].isalnum() else '', descr=r['desc'], value=round(r['value'], 2))
+                    new_pos[(a['id'], '', sec)] = dict(account_id=a['id'], as_of=d, sec_id=sec, cusip=r['cusip'] if r['cusip'].isalnum() else '', descr=r['desc'], value=round(r['value'], 2), acct_type='')
             rows_out = list(new_pos.values())
             ids = sorted({r['account_id'] for r in rows_out})
             log.append(f"{d}: positions {len(rows_out)} rows across {len(ids)} accounts, total {sum(r['value'] for r in rows_out):,.2f}")
