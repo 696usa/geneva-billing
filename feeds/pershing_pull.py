@@ -231,6 +231,10 @@ def main():
             rows_out = list(new_pos.values())
             ids = sorted({r['account_id'] for r in rows_out})
             log.append(f"{d}: positions {len(rows_out)} rows across {len(ids)} accounts, total {sum(r['value'] for r in rows_out):,.2f}")
+            id2num = {a['id']: a['number'] for a in accts}
+            zero = [r for r in rows_out if not r['value'] and not r['sec_id'].upper().startswith(('CASH', 'USD'))]
+            if zero:
+                log.append(f"WARNING {len(zero)} position(s) priced at 0: " + ', '.join(f"{id2num.get(r['account_id'], '?')} {r['sec_id']}" for r in zero[:12]) + (' ...' if len(zero) > 12 else ''))
             if dry:
                 for r in rows_out[:12]: print('  POS', r)
             elif ids:
