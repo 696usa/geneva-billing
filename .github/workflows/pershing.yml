@@ -1,8 +1,11 @@
 name: Pershing nightly pull
 on:
   schedule:
-    - cron: '30 7 * * 1-6'   # 07:30 UTC = 03:30 ET, Mon-Sat (files post overnight)
+    - cron: '15 6-16 * * 1-6'   # hourly 06:15-16:15 UTC (1:15-11:15 AM ET), Mon-Sat; exits fast when nothing new
   workflow_dispatch: {}
+concurrency:
+  group: pershing-pull
+  cancel-in-progress: false
 jobs:
   pull:
     runs-on: ubuntu-latest
